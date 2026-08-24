@@ -1,27 +1,35 @@
 package com.tyranor.next.ui.pages
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -35,19 +43,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.tyranor.next.R
+import com.tyranor.next.scanner.EngineLauncher
 import com.tyranor.next.scanner.EngineScanner
 import com.tyranor.next.scanner.ScanGame
 import com.tyranor.next.theme.NavWhite
 import com.tyranor.next.ui.common.TimeFormats
 import com.tyranor.next.ui.common.glassNavBottomInset
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -60,7 +74,8 @@ fun HomeScreen(modifier: Modifier = Modifier) {
     var quickLaunch by remember { mutableStateOf(EngineScanner.refreshQuickLaunch(context)) }
     var recentGames by remember { mutableStateOf(EngineScanner.loadRecentGames(context).take(10)) }
     var selectedGame by remember { mutableStateOf<ScanGame?>(null) }
-    var removeRecentTarget by remember { mutableStateOf<ScanGame?>(null) }
+    var launchError by remember { mutableStateOf<String?>(null) }
+    var patchLaunchTarget by remember { mutableStateOf<ScanGame?>(null) }
 
     fun replaceGame(updated: ScanGame) {
         quickLaunch = quickLaunch.map { if (it.uri == updated.uri) updated else it }
@@ -96,6 +111,15 @@ fun HomeScreen(modifier: Modifier = Modifier) {
         EngineScanner.removeRecentGame(context, target.uri)
     }
 
+    // 点按直接启动游戏；Artemis 按既有策略弹出补丁确认（与游戏页长按启动一致）。
+    fun launchGame(game: ScanGame) {
+        if (EngineLauncher.needsArtemisPatchConfirm(context, game)) {
+            patchLaunchTarget = game
+        } else {
+            launchError = EngineLauncher.launch(context, game)
+        }
+    }
+
     Column(modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
             Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
@@ -124,6 +148,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     QuickLaunchSlot(
                         game = game,
                         onClick = { if (game != null) selectedGame = game },
+                        onLongClick = { if (game != null) launchGame(game) },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -149,14 +174,15 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     RecentGameRow(
                         game = game,
                         onClick = { selectedGame = game },
-                        onLongClick = { removeRecentTarget = game },
+                        onLongClick = { launchGame(game) },
+                        onSwipeDelete = { removeRecentRecord(game) },
                     )
                 }
             }
         }
     }
 
-    // ===== 点击最近打开项的底部抽屉栏（与游戏页一致，不直接启动游戏） =====
+    // ===== 与游戏页统一：点按打开操作抽屉，长按直接启动 =====
     selectedGame?.let { game ->
         GameActionsSheet(
             game = game,
@@ -170,41 +196,72 @@ fun HomeScreen(modifier: Modifier = Modifier) {
         )
     }
 
-    // ===== 长按最近游玩项：确认删除该条游玩记录 =====
-    removeRecentTarget?.let { game ->
+    // ===== Artemis 首次启动补丁确认（与游戏页一致） =====
+    patchLaunchTarget?.let { game ->
         AppAlertDialog(
-            onDismissRequest = { removeRecentTarget = null },
+            onDismissRequest = { patchLaunchTarget = null },
             title = {
-                Text("删除游玩记录", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "应用自动补丁",
+                    style = MaterialTheme.typography.titleMedium,
+                )
             },
             text = {
                 Text(
-                    "将「${game.title}」从最近游玩中移除？",
+                    "「${game.title}」的启动文件打包在 .pfs 归档内，首次启动需要解出少量基础文件" +
+                        "（system.ini、窗口配置与视频）并适配 Android 平台。是否应用补丁？",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    removeRecentRecord(game)
-                    removeRecentTarget = null
-                }) { Text("确定") }
+                TextButton(
+                    onClick = {
+                        patchLaunchTarget = null
+                        launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.ALWAYS)
+                    },
+                ) { Text("总是") }
             },
             dismissButton = {
-                TextButton(onClick = { removeRecentTarget = null }) { Text("取消") }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            patchLaunchTarget = null
+                            launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.NEVER)
+                        },
+                    ) { Text("不再") }
+                    TextButton(
+                        onClick = {
+                            patchLaunchTarget = null
+                            launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.ONCE)
+                        },
+                    ) { Text("本次") }
+                }
+            },
+        )
+    }
+
+    launchError?.let { message ->
+        AppAlertDialog(
+            onDismissRequest = { launchError = null },
+            title = { Text("启动失败", style = MaterialTheme.typography.titleMedium) },
+            text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = { launchError = null }) { Text("确定") }
             },
         )
     }
 }
 
-/** 首页快捷启动槽位：已设置复用游戏页卡片样式（封面跟随游戏页），空槽显示白色封面 + 加号。 */
+/** 首页快捷启动槽位：已设置复用游戏页卡片样式（封面跟随游戏页），交互与游戏页统一——点按开菜单、长按直启；空槽显示白色封面 + 加号。 */
 @Composable
 private fun QuickLaunchSlot(
     game: ScanGame?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
 ) {
     if (game != null) {
-        GameCard(game = game, onClick = onClick, modifier = modifier)
+        GameCard(game = game, onClick = onClick, modifier = modifier, onLongClick = onLongClick)
     } else {
         Column(modifier) {
             Box(
@@ -234,37 +291,99 @@ private fun QuickLaunchSlot(
     }
 }
 
-/** 最近打开列表项：圆角长矩形，左侧统一图标 + 游戏名，右侧打开时间；长按删除该条记录。 */
+/** 最近打开列表项：圆角长矩形，左侧统一图标 + 游戏名，右侧打开时间；交互与游戏页统一——点按开菜单、长按直启；向左滑动约 1/6 露出独立删除按钮，点击直接移除该条记录。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecentGameRow(game: ScanGame, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(NavWhite)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 23.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            painter = painterResource(R.drawable.ic_recent),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
-            modifier = Modifier.size(24.dp),
-        )
-        Text(
-            game.title,
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 14.dp),
-        )
-        Text(
-            TimeFormats.formatDateTime(game.openTime),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp),
-        )
+private fun RecentGameRow(
+    game: ScanGame,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onSwipeDelete: () -> Unit,
+) {
+    BoxWithConstraints {
+        val revealPx = with(LocalDensity.current) { (maxWidth / 6f).toPx() }
+        val scope = rememberCoroutineScope()
+        val offset = remember { Animatable(0f) }
+        // 统一裁切圆角：红色删除层与白色内容层圆角一致，内容左移越界部分被裁掉
+        Box(Modifier.clip(RoundedCornerShape(8.dp))) {
+            // 删除层：主题色背景 + 白色删除图标，仅滑出约 1/6 时露出右侧「删除」区域
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(MaterialTheme.colorScheme.primary)
+                    .clickable(onClick = onSwipeDelete),
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(with(LocalDensity.current) { revealPx.toDp() })
+                        .align(Alignment.CenterEnd),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "删除",
+                        tint = Color.White,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .offset { IntOffset(offset.value.roundToInt(), 0) }
+                    .fillMaxWidth()
+                    .background(NavWhite)
+                    .combinedClickable(
+                        onClick = {
+                            if (offset.value != 0f) {
+                                scope.launch { offset.animateTo(0f) }
+                            } else {
+                                onClick()
+                            }
+                        },
+                        onLongClick = onLongClick,
+                    )
+                    .pointerInput(revealPx) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                scope.launch {
+                                    offset.animateTo(if (offset.value < -revealPx / 2f) -revealPx else 0f)
+                                }
+                            },
+                            onDragCancel = {
+                                scope.launch {
+                                    offset.animateTo(if (offset.value < -revealPx / 2f) -revealPx else 0f)
+                                }
+                            },
+                        ) { _, dragAmount ->
+                            scope.launch {
+                                offset.snapTo((offset.value + dragAmount).coerceIn(-revealPx, 0f))
+                            }
+                        }
+                    }
+                    .padding(horizontal = 16.dp, vertical = 23.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_recent),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.size(24.dp),
+                )
+                Text(
+                    game.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 14.dp),
+                )
+                Text(
+                    TimeFormats.formatDateTime(game.openTime),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 12.dp),
+                )
+            }
+        }
     }
 }

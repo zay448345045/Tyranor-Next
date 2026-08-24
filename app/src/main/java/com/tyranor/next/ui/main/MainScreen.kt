@@ -1,11 +1,6 @@
 package com.tyranor.next.ui.main
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -13,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -21,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,6 +40,7 @@ import com.tyranor.next.ui.pages.EngineScreen
 import com.tyranor.next.ui.pages.GameScreen
 import com.tyranor.next.ui.pages.HomeScreen
 import com.tyranor.next.ui.pages.SettingsScreen
+import kotlinx.coroutines.launch
 
 // 底部导航栏 Tab 定义
 private data class Tab(
@@ -60,10 +59,23 @@ private val tabItems = listOf(
 fun MainScreen(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   var selectedIndex by rememberSaveable { mutableStateOf(0) }
+  val pagerState = rememberPagerState(initialPage = selectedIndex, pageCount = { tabItems.size })
+  val scope = rememberCoroutineScope()
   val unselectedColor = UnselectedGrey
   // 导航栏样式：应用设置 → 默认 / 圆角液态玻璃（内存态，设置页切换即时生效）
-  LaunchedEffect(Unit) { AppSettingsStore.initNavStyle(context) }
+  LaunchedEffect(Unit) {
+    AppSettingsStore.initNavStyle(context)
+    AppSettingsStore.initGameSort(context)
+  }
   val liquidGlass = AppSettingsStore.navStyleState.value == AppSettingsStore.NAV_STYLE_LIQUID_GLASS
+
+  fun selectPage(index: Int) {
+    if (index == selectedIndex) return
+    selectedIndex = index
+    scope.launch {
+      pagerState.animateScrollToPage(index, animationSpec = tween(durationMillis = 240))
+    }
+  }
 
   // 外层只负责布局：内容区 + 底部导航栏（不用 Scaffold，避免与子页顶部栏的 inset 冲突）
   Box(modifier.fillMaxSize()) {
@@ -71,27 +83,19 @@ fun MainScreen(modifier: Modifier = Modifier) {
     // 关键：背景必须在 layerBackdrop 之后（内层）——layerBackdrop 只录制它之后的内容，
     // 放在外层（Surface/Column 背景）的内容不会被采样，玻璃会采到透明而漏出文字。
     val backdrop = rememberLayerBackdrop()
-    Column(
-      Modifier
-        .fillMaxSize()
-        .layerBackdrop(backdrop)
-        .background(MaterialTheme.colorScheme.background),
-    ) {
+    val contentModifier = Modifier
+      .fillMaxSize()
+      .then(if (liquidGlass) Modifier.layerBackdrop(backdrop) else Modifier)
+      .background(MaterialTheme.colorScheme.background)
+    Column(contentModifier) {
       Box(Modifier.weight(1f).fillMaxWidth()) {
         WithoutPressIndication {
-          AnimatedContent(
-            targetState = selectedIndex,
-            transitionSpec = {
-              val direction = if (targetState > initialState) 1 else -1
-              slideInHorizontally(
-                animationSpec = tween(durationMillis = 240),
-                initialOffsetX = { fullWidth -> direction * fullWidth },
-              ) togetherWith slideOutHorizontally(
-                animationSpec = tween(durationMillis = 240),
-                targetOffsetX = { fullWidth -> -direction * fullWidth },
-              ) using SizeTransform(clip = false)
-            },
-            label = "main_page_horizontal_slide",
+          HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            // 仅预组合相邻页：目标页在点击前已就绪，同时避免四个完整页面参与每帧测量。
+            beyondViewportPageCount = 1,
+            userScrollEnabled = false,
           ) { page ->
             when (page) {
               0 -> HomeScreen(Modifier.fillMaxSize())
@@ -112,7 +116,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
             val itemColor = if (selected) MaterialTheme.colorScheme.primary else unselectedColor
             NavigationBarItem(
               selected = selected,
-              onClick = { selectedIndex = index },
+              onClick = { selectPage(index) },
               icon = {
                 Image(
                   painter = painterResource(tab.iconRes),
@@ -144,7 +148,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         primaryColor = MaterialTheme.colorScheme.primary,
         unselectedColor = unselectedColor,
         items = tabItems.map { LiquidGlassNavItem(it.label, it.iconRes) },
-        onItemClick = { selectedIndex = it },
+        onItemClick = { selectPage(it) },
         modifier = Modifier.align(Alignment.BottomCenter),
       )
     }

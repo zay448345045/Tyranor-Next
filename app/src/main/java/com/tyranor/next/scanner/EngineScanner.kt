@@ -23,6 +23,16 @@ object EngineScanner {
     private const val KEY_RECENT_GAMES = "recent_games"
     private const val KEY_QUICK_LAUNCH = "quick_launch" // 首页快捷启动（最多 3 个）
 
+    // 主页面会在 Tab 动画中反复进入组合。将已解析的数据保留在进程内，避免每次切页都在
+    // 主线程重新读取 SharedPreferences、split 字符串并构造完整游戏列表。
+    private val cacheLock = Any()
+    @Volatile
+    private var gamesCache: List<ScanGame>? = null
+    @Volatile
+    private var recentGamesCache: List<ScanGame>? = null
+    @Volatile
+    private var quickLaunchCache: List<ScanGame>? = null
+
     /**
      * 将 SAF tree/document URI 映射为真实文件路径（用于引擎 native 启动）。
      * 移植自 RinneMobile ScriptEngineLaunchers.uriToFilePath：
@@ -75,9 +85,16 @@ object EngineScanner {
 
     // ============ 游戏结果持久化 ============
 
-    fun saveGames(context: Context, games: List<ScanGame>) = saveList(context, KEY_GAMES, games)
+    fun saveGames(context: Context, games: List<ScanGame>) {
+        val snapshot = games.toList()
+        gamesCache = snapshot
+        saveList(context, KEY_GAMES, snapshot)
+    }
 
-    fun loadGames(context: Context): List<ScanGame> = loadList(context, KEY_GAMES)
+    fun loadGames(context: Context): List<ScanGame> =
+        gamesCache ?: synchronized(cacheLock) {
+            gamesCache ?: loadList(context, KEY_GAMES).also { gamesCache = it }
+        }
 
     fun recordRecentGame(context: Context, game: ScanGame) {
         val touched = game.copy(openTime = System.currentTimeMillis())
@@ -85,7 +102,10 @@ object EngineScanner {
         saveRecentGames(context, next)
     }
 
-    fun loadRecentGames(context: Context): List<ScanGame> = loadList(context, KEY_RECENT_GAMES)
+    fun loadRecentGames(context: Context): List<ScanGame> =
+        recentGamesCache ?: synchronized(cacheLock) {
+            recentGamesCache ?: loadList(context, KEY_RECENT_GAMES).also { recentGamesCache = it }
+        }
 
     /** 删除游戏时从最近游戏列表中移除对应条目。 */
     fun removeRecentGame(context: Context, uri: String) {
@@ -104,12 +124,18 @@ object EngineScanner {
         return name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifEmpty { "default" }
     }
 
-internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
-        saveList(context, KEY_RECENT_GAMES, games)
+    internal fun saveRecentGames(context: Context, games: List<ScanGame>) {
+        val snapshot = games.toList()
+        recentGamesCache = snapshot
+        saveList(context, KEY_RECENT_GAMES, snapshot)
+    }
 
     // ============ 首页快捷启动（最多 3 个） ============
 
-    fun loadQuickLaunch(context: Context): List<ScanGame> = loadList(context, KEY_QUICK_LAUNCH)
+    fun loadQuickLaunch(context: Context): List<ScanGame> =
+        quickLaunchCache ?: synchronized(cacheLock) {
+            quickLaunchCache ?: loadList(context, KEY_QUICK_LAUNCH).also { quickLaunchCache = it }
+        }
 
     fun isQuickLaunched(context: Context, uri: String): Boolean =
         loadQuickLaunch(context).any { it.uri == uri }
@@ -139,8 +165,11 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         return refreshed
     }
 
-    internal fun saveQuickLaunch(context: Context, games: List<ScanGame>) =
-        saveList(context, KEY_QUICK_LAUNCH, games)
+    internal fun saveQuickLaunch(context: Context, games: List<ScanGame>) {
+        val snapshot = games.toList()
+        quickLaunchCache = snapshot
+        saveList(context, KEY_QUICK_LAUNCH, snapshot)
+    }
 
     // ---------- 通用存取助手 ----------
 

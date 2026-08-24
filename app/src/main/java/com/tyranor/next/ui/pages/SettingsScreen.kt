@@ -380,7 +380,7 @@ private fun GroupChannelItem(label: String, iconRes: Int, onClick: () -> Unit) {
         )
         Text(
             label,
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(start = 12.dp).weight(1f),
         )
         Icon(

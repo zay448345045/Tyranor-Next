@@ -2,9 +2,11 @@ package com.tyranor.next.ui.pages
 
 import android.app.Activity
 import android.app.ActivityOptions
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -94,8 +96,6 @@ import java.util.Locale
 fun GameScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    AppSettingsStore.initGameSort(context)
-
     var games by remember { mutableStateOf(EngineScanner.loadGames(context)) }
     var scanning by remember { mutableStateOf(false) }
     var selectedGame by remember { mutableStateOf<ScanGame?>(null) }
@@ -1000,16 +1000,40 @@ internal fun GameCard(
 @Composable
 internal fun rememberCoverBitmap(coverUri: String?): androidx.compose.runtime.State<ImageBitmap?> {
     val context = LocalContext.current
-    return produceState<ImageBitmap?>(initialValue = null, coverUri) {
+    val cached = coverUri?.let(CoverBitmapCache::get)
+    return produceState<ImageBitmap?>(initialValue = cached?.asImageBitmap(), coverUri) {
+        if (cached != null || coverUri.isNullOrBlank()) return@produceState
         value = withContext(Dispatchers.IO) {
-            if (coverUri.isNullOrBlank()) return@withContext null
-            runCatching {
-                context.contentResolver.openInputStream(android.net.Uri.parse(coverUri))?.use { input ->
-                    BitmapFactory.decodeStream(input)?.asImageBitmap()
-                }
-            }.getOrNull()
+            decodeCoverThumbnail(context, coverUri)?.also { CoverBitmapCache.put(coverUri, it) }?.asImageBitmap()
         }
     }
+}
+
+/** 封面只按卡片实际需要的尺寸解码，避免切页时上传原始大图；已解码缩略图跨页面复用。 */
+private fun decodeCoverThumbnail(context: android.content.Context, uriText: String): Bitmap? = runCatching {
+    val uri = android.net.Uri.parse(uriText)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+
+    var sampleSize = 1
+    while (bounds.outWidth / (sampleSize * 2) >= CoverDecodeMaxWidthPx &&
+        bounds.outHeight / (sampleSize * 2) >= CoverDecodeMaxHeightPx
+    ) {
+        sampleSize *= 2
+    }
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+}.getOrNull()
+
+private const val CoverDecodeMaxWidthPx = 512
+private const val CoverDecodeMaxHeightPx = 683
+
+private object CoverBitmapCache : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
 }
 
 internal fun EngineType.coverColor(): Color = when (this) {

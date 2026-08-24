@@ -103,6 +103,9 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
         applyEnginePreferences();
         super.onCreate(bundle);
         app = this;
+        // KR2 宿主不是 SDLActivity（SDL.setContext 从未被调用），须显式注册耳机
+        // 热插拔监听，否则游戏中插拔耳机后静态 AudioTrack 失联、永久静音。
+        org.libsdl.app.AudioRouteWatcher.ensureRegistered(this);
         if (getIntent().getBooleanExtra("originMode", false)) {
             return;
         }

@@ -13,7 +13,8 @@ import android.util.Log;
 public class SDLAudioManager {
     protected static final String TAG = "SDLAudio";
     protected static AudioRecord mAudioRecord;
-    protected static AudioTrack mAudioTrack;
+    /** Swapped on the main thread (AudioRouteWatcher), read by the native audio writer thread. */
+    protected static volatile AudioTrack mAudioTrack;
 
     public static void audioClose() {
         AudioTrack audioTrack = mAudioTrack;
@@ -293,6 +294,9 @@ public class SDLAudioManager {
                     return null;
                 }
                 mAudioTrack.play();
+                // Watch headset/BT route changes so the static track gets re-routed
+                // instead of going silent until relaunch.
+                AudioRouteWatcher.ensureRegistered();
             }
             iArr[0] = mAudioTrack.getSampleRate();
             iArr[1] = mAudioTrack.getAudioFormat();

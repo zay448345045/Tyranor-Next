@@ -24,6 +24,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.LocaleList;
 import android.os.Message;
 import android.os.ParcelFileDescriptor;
@@ -51,6 +52,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.core.engine.DoubleBackExit;
 import com.core.engine.EngineThemeColors;
+import org.libsdl.app.AudioRouteWatcher;
 
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
@@ -457,6 +459,18 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
         backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
         SDL.setContext(this);
 
+        // 耳机/蓝牙热插拔：SDL 3.1.x 预览版不会自动把音频流迁移到新输出设备，
+        // 手动 Home 循环才能恢复。这里在路由变化时复刻同样的
+        // pauseNativeThread/resumeNativeThread 迷你周期，实现无闪屏自愈。
+        AudioRouteWatcher.ensureRegistered(this, () -> {
+            if (mBrokenLibraries || mSDLThread == null || mNextNativeState != NativeState.RESUMED) return;
+            Log.i(TAG, "audio route changed, cycling native pause/resume");
+            pauseNativeThread();
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (mNextNativeState == NativeState.PAUSED) resumeNativeThread();
+            }, 150L);
+        });
+
         mClipboardHandler = new SDLClipboardHandler();
 
         mHIDDeviceManager = HIDDeviceManager.acquire(this);
@@ -693,6 +707,9 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
     @Override
     protected void onDestroy() {
         Log.v(TAG, "onDestroy()");
+        // The recovery lambda captures this Activity; drop the static reference so it
+        // doesn't leak past destruction (re-registered on next onCreate if needed).
+        AudioRouteWatcher.clearRecoveryAction();
         DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
         DoubleBackExit.clear(this);
 
