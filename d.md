@@ -1,0 +1,2 @@
+[![Total Downloads](https://img.shields.io/github/downloads/Weiss-UltimateSavior/Tyranor-Next/total?style=for-the-badge&color=2ea44f&logo=github)](https://github.com/Weiss-UltimateSavior/Tyranor-Next/releases)
+[![Total Downloads](https://img.shields.io/github/downloads/zay448345045/Tyranor-Next/total?style=for-the-badge&color=2ea44f&logo=github)](https://github.com/zay448345045/Tyranor-Next/releases)
