@@ -44,7 +44,6 @@ object VndbCoverService {
     fun bindCandidate(context: Context, game: ScanGame, candidate: VndbCandidate): ScanGame? {
         val cover = downloadCover(context, candidate.coverUrl, "vndb_${stableKey(game.uri)}") ?: return null
         return game.copy(
-            title = candidate.displayTitle().ifBlank { game.title },
             coverUri = cover,
             vndbId = candidate.id,
             metadataTitle = candidate.displayTitle(),
@@ -203,7 +202,9 @@ object VndbCoverService {
     }
 
     private fun cleanTitle(s: String): String {
-        val cleaned = s.replace("[\\[\\]【】（）()].*".toRegex(), " ")
+        val cleaned = s.replace("""\[[^\]]*\]|【[^】]*】""".toRegex(), " ")
+            .replace("[\\[\\]【】]".toRegex(), " ")
+            .replace("[（）()].*".toRegex(), " ")
             .replace("(?i)complete|汉化|中文版|日文版|体验版|trial|patch".toRegex(), " ")
             .replace('_', ' ')
             .trim()

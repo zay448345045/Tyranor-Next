@@ -80,7 +80,7 @@ private fun EngineRow(engine: EngineType) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Image(
-                painter = painterResource(R.drawable.engine_logo),
+                painter = painterResource(R.drawable.ic_engine_icon),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
@@ -116,6 +116,10 @@ private fun engineDescription(engine: EngineType): String = when (engine) {
     EngineType.KIRIKIRI -> "Kirikiri2 / 吉里吉里，.xp3 与 startup.tjs 游戏"
     EngineType.ONS -> "ONScripter，nscript.dat 与 .nsa 归档游戏"
     EngineType.TYRANO -> "TyranoBuilder，index.html 与 tyrano/ 脚本游戏"
+    EngineType.RPG_MV -> "RPG Maker MV，www 与 js/rpg_core.js 游戏"
+    EngineType.RPG_MZ -> "RPG Maker MZ，www 与 js/rmmz_core.js 游戏"
+    EngineType.VN -> "VN，globalData.vndata 网页游戏"
+    EngineType.WEB_OTHER -> "WebOther，通用 index.html 网页游戏"
     EngineType.ARTEMIS -> "Artemis，system.ini 与 .pfs 归档游戏"
     EngineType.UNKNOWN -> "未知引擎"
 }

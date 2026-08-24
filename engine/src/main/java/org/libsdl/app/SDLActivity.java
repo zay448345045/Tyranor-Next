@@ -36,6 +36,7 @@ import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import com.core.engine.DoubleBackExit;
 import java.util.Hashtable;
 import java.util.Locale;
 
@@ -90,6 +91,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     protected static DummyEdit mTextEdit;
     Handler commandHandler = new SDLCommandHandler();
     protected final int[] messageboxSelection = new int[1];
+    private Object backInvokedCallback;
     private final Runnable rehideSystemUi = new Runnable() { // from class: org.libsdl.app.SDLActivity.7
         @Override // java.lang.Runnable
         public void run() {
@@ -734,6 +736,9 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         if (mBrokenLibraries || (keyCode = keyEvent.getKeyCode()) == 25 || keyCode == 24 || keyCode == 27 || keyCode == 168 || keyCode == 169) {
             return false;
         }
+        if (DoubleBackExit.dispatchBackKey(this, keyEvent, this::exitFromBack)) {
+            return true;
+        }
         return super.dispatchKeyEvent(keyEvent);
     }
 
@@ -893,7 +898,7 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
         if (nativeGetHintBoolean("SDL_ANDROID_TRAP_BACK_BUTTON", false) || isFinishing()) {
             return;
         }
-        super.onBackPressed();
+        DoubleBackExit.handleBack(this, this::superOnBackPressed);
     }
 
     @Override // i.AbstractActivityC1223l, b.AbstractActivityC0818o, android.app.Activity, android.content.ComponentCallbacks
@@ -946,6 +951,7 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
         }
         if (mBrokenLibraries) {
             mSingleton = this;
+            backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
             AlertDialog.Builder builder = new AlertDialog.Builder(this);
             builder.setMessage("An error occurred while trying to start the application. Please try again and/or reinstall." + System.getProperty("line.separator") + System.getProperty("line.separator") + "Error: " + message);
             builder.setTitle("SDL Error");
@@ -962,6 +968,7 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
         SDL.setupJNI();
         SDL.initialize();
         mSingleton = this;
+        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
         SDL.setContext(this);
         mClipboardHandler = new SDLClipboardHandler();
         mHIDDeviceManager = HIDDeviceManager.acquire(this);
@@ -990,6 +997,8 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
     @Override // i.AbstractActivityC1223l, androidx.fragment.app.B, android.app.Activity
     public void onDestroy() {
         Log.v(TAG, "onDestroy()");
+        DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
+        DoubleBackExit.clear(this);
         HIDDeviceManager hIDDeviceManager = mHIDDeviceManager;
         if (hIDDeviceManager != null) {
             HIDDeviceManager.release(hIDDeviceManager);
@@ -1225,5 +1234,12 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
 
     public void superOnBackPressed() {
         super.onBackPressed();
+    }
+
+    protected void exitFromBack() {
+        if (nativeGetHintBoolean("SDL_ANDROID_TRAP_BACK_BUTTON", false) || isFinishing()) {
+            return;
+        }
+        superOnBackPressed();
     }
 }

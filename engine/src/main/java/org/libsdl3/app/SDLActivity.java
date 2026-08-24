@@ -49,6 +49,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.core.engine.DoubleBackExit;
 import com.core.engine.EngineThemeColors;
 
 import java.io.FileNotFoundException;
@@ -231,6 +232,7 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
     protected static boolean mActivityCreated = false;
     private static SDLFileDialogState mFileDialogState = null;
     protected static boolean mDispatchingKeyEvent = false;
+    private Object backInvokedCallback;
 
     public static SDLGenericMotionListener_API14 getMotionListener() {
         if (mMotionListener == null) {
@@ -405,6 +407,7 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
 
         if (mBrokenLibraries) {
             mSingleton = this;
+            backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
             AlertDialog.Builder dlgAlert  = new AlertDialog.Builder(this);
             dlgAlert.setMessage("An error occurred while trying to start the application. Please try again and/or reinstall."
                   + System.getProperty("line.separator")
@@ -451,6 +454,7 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
 
         // So we can call stuff from static callbacks
         mSingleton = this;
+        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
         SDL.setContext(this);
 
         mClipboardHandler = new SDLClipboardHandler();
@@ -689,6 +693,8 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
     @Override
     protected void onDestroy() {
         Log.v(TAG, "onDestroy()");
+        DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
+        DoubleBackExit.clear(this);
 
         if (mHIDDeviceManager != null) {
             HIDDeviceManager.release(mHIDDeviceManager);
@@ -739,7 +745,7 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
 
         // Default system back button behavior.
         if (!isFinishing()) {
-            super.onBackPressed();
+            DoubleBackExit.handleBack(this, this::superOnBackPressed);
         }
     }
 
@@ -819,6 +825,9 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
             ) {
             return false;
         }
+        if (DoubleBackExit.dispatchBackKey(this, event, this::exitFromBack)) {
+            return true;
+        }
         mDispatchingKeyEvent = true;
         boolean result = super.dispatchKeyEvent(event);
         mDispatchingKeyEvent = false;
@@ -827,6 +836,13 @@ public class SDLActivity extends AppCompatActivity implements View.OnSystemUiVis
 
     public static boolean dispatchingKeyEvent() {
         return mDispatchingKeyEvent;
+    }
+
+    private void exitFromBack() {
+        if (SDLActivity.nativeGetHintBoolean("SDL_ANDROID_TRAP_BACK_BUTTON", false) || isFinishing()) {
+            return;
+        }
+        superOnBackPressed();
     }
 
     /* Transition to next state */
@@ -2253,4 +2269,3 @@ class SDLClipboardHandler implements
         SDLActivity.onNativeClipboardChanged();
     }
 }
-

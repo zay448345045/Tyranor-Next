@@ -13,7 +13,7 @@ public final class Kirikiroid139 extends KirikiroidLauncherBaseActivity {
             return;
         }
         setResolvedGameLibrary(gameLibrary);
-        System.loadLibrary("krkr_bridge");
+        System.loadLibrary("krkr_bridge_v2");
         super.onLoadNativeLibraries();
     }
 

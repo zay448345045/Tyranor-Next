@@ -13,7 +13,7 @@ import kotlin.math.abs
 
 /**
  * 精简版游戏扫描器，识别逻辑移植自 RinneMobile 的 EngineDetector/GameScanner。
- * 支持引擎：Kirikiri(kr/krkr2)、ONS、Tyrano(ty)、Artemis(ar)。
+ * 支持引擎：Kirikiri、ONS、Tyrano、RPG Maker MV/MZ、VN、WebOther、Artemis。
  */
 object EngineScanner {
 
@@ -66,6 +66,11 @@ object EngineScanner {
         } catch (e: Exception) {
             null
         }
+    }
+
+    fun isRemovableStoragePath(path: String): Boolean {
+        val normalized = path.replace('\\', '/')
+        return normalized.matches(Regex("""^/storage/(?!emulated/0(?:/|$))[^/]+(/.*)?$"""))
     }
 
     // ============ 游戏结果持久化 ============
@@ -200,12 +205,52 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         prefs.edit().putString(KEY_ROOTS, existing.joinToString("\n")).apply()
     }
 
+    fun removeRootAndGames(context: Context, uri: Uri) {
+        removeRoot(context, uri)
+        val root = uri.toString()
+        val removedUris = loadGames(context)
+            .filter { isGameUnderRoot(root, it.uri) }
+            .mapTo(HashSet()) { it.uri }
+        if (removedUris.isEmpty()) return
+        saveGames(context, loadGames(context).filterNot { it.uri in removedUris })
+        saveRecentGames(context, loadRecentGames(context).filterNot { it.uri in removedUris })
+        saveQuickLaunch(context, loadQuickLaunch(context).filterNot { it.uri in removedUris })
+    }
+
     fun loadRoots(context: Context): List<String> =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_ROOTS, null)
             ?.split("\n")
             ?.filter { it.isNotBlank() }
             ?: emptyList()
+
+    private fun isGameUnderRoot(rootUriText: String, gameUriText: String): Boolean {
+        val rootPath = normalizePath(safUriToPath(rootUriText))
+        val gamePath = normalizePath(safUriToPath(gameUriText) ?: uriFilePath(gameUriText))
+        if (rootPath != null && gamePath != null && isSameOrChildPath(rootPath, gamePath)) return true
+
+        val rootDocId = documentId(rootUriText) ?: return false
+        val gameDocId = documentId(gameUriText) ?: return false
+        return gameDocId == rootDocId || gameDocId.startsWith("${rootDocId.trimEnd('/')}/")
+    }
+
+    private fun documentId(uriText: String): String? = runCatching {
+        val uri = Uri.parse(uriText)
+        DocumentsContract.getDocumentId(uri)
+    }.getOrNull() ?: runCatching {
+        DocumentsContract.getTreeDocumentId(Uri.parse(uriText))
+    }.getOrNull()
+
+    private fun uriFilePath(uriText: String): String? = runCatching {
+        val uri = Uri.parse(uriText)
+        if (uri.scheme.equals("file", ignoreCase = true)) uri.path else null
+    }.getOrNull() ?: uriText.takeIf { it.startsWith("/") }
+
+    private fun normalizePath(path: String?): String? =
+        path?.replace('\\', '/')?.trimEnd('/')?.takeIf { it.isNotBlank() }
+
+    private fun isSameOrChildPath(rootPath: String, gamePath: String): Boolean =
+        gamePath == rootPath || gamePath.startsWith("$rootPath/")
 
     // ============ 扫描游戏 ============
 
@@ -220,6 +265,28 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         all.filter { seen.add(it.uri) }
     }
 
+    /** 全量刷新游戏库：以当前扫描结果为准，移除已删除/改名路径的旧缓存条目。 */
+    suspend fun rescanLibrary(context: Context): List<ScanGame> = withContext(Dispatchers.IO) {
+        val existingByUri = loadGames(context).associateBy { it.uri }
+        val scanned = scanAll(context)
+        val refreshed = scanned.map { current ->
+            existingByUri[current.uri]?.let { previous ->
+                current.copy(
+                    coverUri = previous.coverUri ?: current.coverUri,
+                    vndbId = previous.vndbId,
+                    metadataTitle = previous.metadataTitle,
+                    launchFile = previous.launchFile,
+                    openTime = previous.openTime,
+                )
+            } ?: current
+        }
+        saveGames(context, refreshed)
+        val validUris = refreshed.mapTo(HashSet()) { it.uri }
+        saveRecentGames(context, loadRecentGames(context).filter { it.uri in validUris })
+        saveQuickLaunch(context, loadQuickLaunch(context).filter { it.uri in validUris })
+        refreshed
+    }
+
     /**
      * 增量扫描（游戏库已有数据时调用）：遍历根目录时对已识别游戏目录剪枝跳过，
      * 只发现新游戏；返回 现有游戏 + 新发现游戏（已删除游戏保留，不主动移除）。
@@ -231,10 +298,14 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         val found = mutableListOf<ScanGame>()
         val maxDepth = AppSettingsStore.getScanDepth(context)
         loadRoots(context).forEach { root ->
+            val beforeCount = found.size
             val rootUri = Uri.parse(root)
             val rootDir = DocumentFile.fromTreeUri(context.applicationContext, rootUri)
             if (rootDir != null) {
                 scanRootIncremental(context.applicationContext, rootDir, 0, maxDepth, known, found)
+            }
+            if (found.size == beforeCount) safUriToPath(root)?.let { path ->
+                scanRootIncrementalFile(File(path), 0, maxDepth, known, found)
             }
         }
         existing + found.filter { seen.add(it.uri) }
@@ -251,17 +322,18 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
     ) {
         if (level > maxDepth) return
         if (dir.uri.toString() in known) return
-        val children = dir.listFiles() ?: return
+        val children = dir.listFiles()
 
         val detected = detectEngine(dir)
         if (detected.engine != EngineType.UNKNOWN) {
+            val coverUri = findLocalCoverUri(children)
             out.add(
                 ScanGame(
                     title = dir.name?.takeIf { it.isNotBlank() } ?: "未命名游戏",
                     uri = dir.uri.toString(),
                     engine = detected.engine,
                     launchTarget = detected.launchTarget,
-                    coverUri = null,
+                    coverUri = coverUri,
                 )
             )
             return
@@ -276,12 +348,16 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
     suspend fun scanRoot(context: Context, rootUriStr: String, maxDepth: Int = 3): List<ScanGame> = withContext(Dispatchers.IO) {
         val rootUri = Uri.parse(rootUriStr)
         val root = DocumentFile.fromTreeUri(context.applicationContext, rootUri)
-        if (root == null || !root.isDirectory) return@withContext emptyList()
-
         val results = mutableListOf<ScanGame>()
-        // 深度优先遍历子目录，识别每个候选游戏目录（深度由应用设置「扫描深度」控制）
-        traverseDirectories(context.applicationContext, root, 0, maxDepth, results)
-        results
+        if (root != null && root.isDirectory) {
+            // 深度优先遍历子目录，识别每个候选游戏目录（深度由应用设置「扫描深度」控制）
+            traverseDirectories(context.applicationContext, root, 0, maxDepth, results)
+        }
+        if (results.isEmpty()) safUriToPath(rootUriStr)?.let { path ->
+            traverseFileDirectories(File(path), 0, maxDepth, results)
+        }
+        val seen = HashSet<String>()
+        results.filter { seen.add(it.uri) }
     }
 
     private fun traverseDirectories(
@@ -297,13 +373,14 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         // 1) 本级目录本身可能是游戏（含引擎特征文件）
         val detected = detectEngine(dir)
         if (detected.engine != EngineType.UNKNOWN) {
+            val coverUri = findLocalCoverUri(children)
             out.add(
                 ScanGame(
                     title = dir.name?.takeIf { it.isNotBlank() } ?: "未命名游戏",
                     uri = dir.uri.toString(),
                     engine = detected.engine,
                     launchTarget = detected.launchTarget,
-                    coverUri = null,
+                    coverUri = coverUri,
                 )
             )
             // 已识别为游戏，其子目录多为引擎内部资源，仅扫描直接文件层，不再深挖
@@ -317,6 +394,94 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
             }
         }
     }
+
+    fun applyLocalCover(context: Context, game: ScanGame): ScanGame {
+        if (!game.coverUri.isNullOrBlank()) return game
+        val dir = DocumentFile.fromTreeUri(context.applicationContext, Uri.parse(game.uri)) ?: return game
+        val coverUri = findLocalCoverUri(dir.listFiles())
+        return if (coverUri.isNullOrBlank()) game else game.copy(coverUri = coverUri)
+    }
+
+    private fun findLocalCoverUri(children: Array<DocumentFile>): String? {
+        return LOCAL_COVER_NAMES.firstNotNullOfOrNull { expected ->
+            children.firstOrNull { child ->
+                !child.isDirectory && child.name.equals(expected, ignoreCase = true)
+            }?.uri?.toString()
+        }
+    }
+
+    private fun scanRootIncrementalFile(
+        dir: File,
+        level: Int,
+        maxDepth: Int,
+        known: HashSet<String>,
+        out: MutableList<ScanGame>,
+    ) {
+        if (level > maxDepth || !dir.isDirectory) return
+        if (dir.absolutePath in known) return
+        val children = dir.listFiles() ?: return
+
+        val detected = detectEngine(dir)
+        if (detected.engine != EngineType.UNKNOWN) {
+            out.add(
+                ScanGame(
+                    title = dir.name.takeIf { it.isNotBlank() } ?: "未命名游戏",
+                    uri = dir.absolutePath,
+                    engine = detected.engine,
+                    launchTarget = detected.launchTarget,
+                    coverUri = findLocalCoverUri(children),
+                )
+            )
+            return
+        }
+        children.filter { it.isDirectory }.forEach { child ->
+            scanRootIncrementalFile(child, level + 1, maxDepth, known, out)
+        }
+    }
+
+    private fun traverseFileDirectories(
+        dir: File,
+        level: Int,
+        maxDepth: Int,
+        out: MutableList<ScanGame>,
+    ) {
+        if (level > maxDepth || !dir.isDirectory) return
+        val children = dir.listFiles() ?: return
+
+        val detected = detectEngine(dir)
+        if (detected.engine != EngineType.UNKNOWN) {
+            out.add(
+                ScanGame(
+                    title = dir.name.takeIf { it.isNotBlank() } ?: "未命名游戏",
+                    uri = dir.absolutePath,
+                    engine = detected.engine,
+                    launchTarget = detected.launchTarget,
+                    coverUri = findLocalCoverUri(children),
+                )
+            )
+            return
+        }
+        children.filter { it.isDirectory }.forEach { child ->
+            traverseFileDirectories(child, level + 1, maxDepth, out)
+        }
+    }
+
+    private fun findLocalCoverUri(children: Array<File>): String? {
+        return LOCAL_COVER_NAMES.firstNotNullOfOrNull { expected ->
+            children.firstOrNull { child ->
+                child.isFile && child.name.equals(expected, ignoreCase = true)
+            }?.let { Uri.fromFile(it).toString() }
+        }
+    }
+
+    private val LOCAL_COVER_NAMES = listOf(
+        "cover.jpg",
+        "cover.png",
+        "cover.webp",
+        "cover.jpeg",
+        "cover.bmp",
+        "icon.png",
+    )
 
     // ============ 引擎识别（移植自 EngineDetector） ============
 
@@ -334,6 +499,9 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         var hasIndex = false
         var hasAppAsar = false
         var hasTyranoDir = false
+        var hasRpgMvCore = false
+        var hasRpgMzCore = false
+        var hasVnData = false
         var hasSystemIni = false
         var hasFirstIet = false
         var hasRootPfs = false
@@ -348,9 +516,11 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
             names.add(lower)
             if (f.isDirectory) {
                 if (lower == "tyrano") hasTyranoDir = true
-                // resources 是 Tyrano asar 打包的存放目录（resources/app.asar），需下钻识别
+                if (lower == "app.asar" || childRel.endsWith("/app.asar")) hasAppAsar = true
+                // resources/app.asar 可能是文件，也可能是已解包目录，需继续下钻识别父级游戏目录。
                 if (lower == "data" || lower == "tyrano" || lower == "scenario" ||
-                    lower == "system" || lower == "app" || lower == "game" || lower == "resources"
+                    lower == "system" || lower == "app" || lower == "game" ||
+                    lower == "resources" || lower == "app.asar" || lower == "www" || lower == "js"
                 ) {
                     val sub = f.listFiles()
                     sub.forEach { collect(it, childRel) }
@@ -359,6 +529,9 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
             }
             when {
                 lower == "index.html" || lower == "index.htm" -> hasIndex = true
+                childRel == "js/rpg_core.js" || childRel.endsWith("/js/rpg_core.js") -> hasRpgMvCore = true
+                childRel == "js/rmmz_core.js" || childRel.endsWith("/js/rmmz_core.js") -> hasRpgMzCore = true
+                lower == "globaldata.vndata" -> hasVnData = true
                 lower == "app.asar" || childRel.endsWith("/app.asar") -> hasAppAsar = true
                 lower == "startup.tjs" -> hasStartupTjs = true
                 lower == "config.tjs" -> hasConfigTjs = true
@@ -378,18 +551,118 @@ internal fun saveRecentGames(context: Context, games: List<ScanGame>) =
         if ((hasSystemIni && hasFirstIet) || hasRootPfs || hasAnyPfs) {
             return Detection(EngineType.ARTEMIS, if ((hasSystemIni && hasFirstIet) || hasRootPfs) 95 else 90, "[游戏目录]")
         }
-        // Tyrano（Ty）：浏览器结构（index.html + data/tyrano）或 asar 打包（app.asar / resources/app.asar）
-        if ((hasIndex && hasTyranoDir) || hasAppAsar) {
-            return Detection(EngineType.TYRANO, if (hasAppAsar) 96 else 95, "[游戏目录]")
+        if (hasIndex && hasTyranoDir) {
+            return Detection(EngineType.TYRANO, 95, "[游戏目录]")
+        }
+        // RPG Maker 的 Windows/NW.js 发布目录通常是“游戏主目录/www/...”。
+        // 在主目录识别可避免继续下钻后把所有游戏都命名为 www。
+        if (hasIndex && hasRpgMvCore) {
+            return Detection(EngineType.RPG_MV, 95, "[游戏目录]")
+        }
+        if (hasIndex && hasRpgMzCore) {
+            return Detection(EngineType.RPG_MZ, 95, "[游戏目录]")
+        }
+        if (hasIndex && hasVnData) {
+            return Detection(EngineType.VN, 90, "[游戏目录]")
+        }
+        // 打包 ASAR 无法在 SAF 扫描阶段读取内部目录，启动后由 Web 宿主再次精确识别。
+        if (hasAppAsar) {
+            return Detection(EngineType.TYRANO, 80, "[游戏目录]")
         }
         if (hasIndex) {
-            return Detection(EngineType.TYRANO, 70, "[游戏目录]")
+            return Detection(EngineType.WEB_OTHER, 70, "[游戏目录]")
         }
         // Kirikiri（kr）
         if (xp3Files.isNotEmpty() || hasStartupTjs || hasConfigTjs) {
             return Detection(EngineType.KIRIKIRI, if (xp3Files.isNotEmpty()) 95 else 80, xp3Files.firstOrNull() ?: "[游戏目录]")
         }
         // ONS
+        if (hasOnsScript || hasOnsArchive) {
+            return Detection(EngineType.ONS, if (hasOnsScript) 90 else 70, "[游戏目录]")
+        }
+        return r
+    }
+
+    fun detectEngine(dir: File): Detection {
+        val r = Detection(EngineType.UNKNOWN, 0, "")
+        if (!dir.isDirectory) return r
+        val children = dir.listFiles() ?: return r
+
+        val xp3Files = mutableListOf<String>()
+        var hasStartupTjs = false
+        var hasConfigTjs = false
+        var hasIndex = false
+        var hasAppAsar = false
+        var hasTyranoDir = false
+        var hasRpgMvCore = false
+        var hasRpgMzCore = false
+        var hasVnData = false
+        var hasSystemIni = false
+        var hasFirstIet = false
+        var hasRootPfs = false
+        var hasAnyPfs = false
+        var hasOnsScript = false
+        var hasOnsArchive = false
+
+        fun collect(f: File, rel: String) {
+            val lower = f.name.lowercase(Locale.ROOT)
+            if (lower.isEmpty()) return
+            val childRel = if (rel.isEmpty()) lower else "$rel/$lower"
+            if (f.isDirectory) {
+                if (lower == "tyrano") hasTyranoDir = true
+                if (lower == "app.asar" || childRel.endsWith("/app.asar")) hasAppAsar = true
+                if (lower == "data" || lower == "tyrano" || lower == "scenario" ||
+                    lower == "system" || lower == "app" || lower == "game" ||
+                    lower == "resources" || lower == "app.asar" || lower == "www" || lower == "js"
+                ) {
+                    f.listFiles()?.forEach { collect(it, childRel) }
+                }
+                return
+            }
+            when {
+                lower == "index.html" || lower == "index.htm" -> hasIndex = true
+                childRel == "js/rpg_core.js" || childRel.endsWith("/js/rpg_core.js") -> hasRpgMvCore = true
+                childRel == "js/rmmz_core.js" || childRel.endsWith("/js/rmmz_core.js") -> hasRpgMzCore = true
+                lower == "globaldata.vndata" -> hasVnData = true
+                lower == "app.asar" || childRel.endsWith("/app.asar") -> hasAppAsar = true
+                lower == "startup.tjs" -> hasStartupTjs = true
+                lower == "config.tjs" -> hasConfigTjs = true
+                lower == "system.ini" -> hasSystemIni = true
+                childRel == "system/first.iet" || childRel.endsWith("/system/first.iet") -> hasFirstIet = true
+                lower == "root.pfs" -> hasRootPfs = true
+                lower.endsWith(".pfs") -> hasAnyPfs = true
+                lower == "0.txt" || lower == "00.txt" || lower == "nscript.dat" ||
+                    lower == "onscript.nt2" || lower == "onscript.nt3" -> hasOnsScript = true
+                lower.endsWith(".nsa") || lower.endsWith(".sar") -> hasOnsArchive = true
+                lower.endsWith(".xp3") -> xp3Files.add(childRel)
+            }
+        }
+        children.forEach { collect(it, "") }
+
+        if ((hasSystemIni && hasFirstIet) || hasRootPfs || hasAnyPfs) {
+            return Detection(EngineType.ARTEMIS, if ((hasSystemIni && hasFirstIet) || hasRootPfs) 95 else 90, "[游戏目录]")
+        }
+        if (hasIndex && hasTyranoDir) {
+            return Detection(EngineType.TYRANO, 95, "[游戏目录]")
+        }
+        if (hasIndex && hasRpgMvCore) {
+            return Detection(EngineType.RPG_MV, 95, "[游戏目录]")
+        }
+        if (hasIndex && hasRpgMzCore) {
+            return Detection(EngineType.RPG_MZ, 95, "[游戏目录]")
+        }
+        if (hasIndex && hasVnData) {
+            return Detection(EngineType.VN, 90, "[游戏目录]")
+        }
+        if (hasAppAsar) {
+            return Detection(EngineType.TYRANO, 80, "[游戏目录]")
+        }
+        if (hasIndex) {
+            return Detection(EngineType.WEB_OTHER, 70, "[游戏目录]")
+        }
+        if (xp3Files.isNotEmpty() || hasStartupTjs || hasConfigTjs) {
+            return Detection(EngineType.KIRIKIRI, if (xp3Files.isNotEmpty()) 95 else 80, xp3Files.firstOrNull() ?: "[游戏目录]")
+        }
         if (hasOnsScript || hasOnsArchive) {
             return Detection(EngineType.ONS, if (hasOnsScript) 90 else 70, "[游戏目录]")
         }

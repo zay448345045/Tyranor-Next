@@ -30,14 +30,24 @@ class GameSaveManager(private val context: Context) {
             EngineType.KIRIKIRI -> {
                 val scoped = PerGameSettingsStore.getBool(appContext, game.uri, PerGameSettingsStore.F_SCOPED_SAVE_DIR)
                     ?: EngineSettingsStore.isKrScopedSaveDir(appContext)
-                if (scoped && EngineSettingsStore.getKrKernel(appContext) != EngineSettingsStore.KERNEL_KRKRSDL3) {
-                    val internal = appContext.filesDir
-                        ?: return SaveLocation(null, "应用内部存储目录不可用", false)
-                    SaveLocation(
-                        File(File(File(internal, "krkr_mirror"), EngineScanner.safeSaveName(root)), "savedata"),
-                        "KRKR 独立存档目录",
-                        true,
-                    )
+                if (scoped) {
+                    if (effectiveKrKernel(game, root) == EngineSettingsStore.KERNEL_KRKRSDL3) {
+                        val external = appContext.getExternalFilesDir(null)
+                            ?: return SaveLocation(null, "KRKR SDL3 应用独立存储目录不可用", false)
+                        SaveLocation(
+                            File(File(external, "save"), EngineScanner.safeSaveName(root)),
+                            "KRKR SDL3 独立存档目录",
+                            true,
+                        )
+                    } else {
+                        val internal = appContext.filesDir
+                            ?: return SaveLocation(null, "应用内部存储目录不可用", false)
+                        SaveLocation(
+                            File(File(File(internal, "krkr_mirror"), EngineScanner.safeSaveName(root)), "savedata"),
+                            "KRKR 独立存档目录",
+                            true,
+                        )
+                    }
                 } else {
                     SaveLocation(File(root, "savedata"), "KRKR 游戏目录存档", true)
                 }
@@ -52,7 +62,9 @@ class GameSaveManager(private val context: Context) {
                     SaveLocation(File(root, "save"), "ONS 游戏内存档目录", true)
                 }
             }
-            EngineType.TYRANO -> {
+            EngineType.TYRANO,
+            EngineType.RPG_MV,
+            EngineType.RPG_MZ -> {
                 val scoped = PerGameSettingsStore.getBool(appContext, game.uri, "ty_scoped")
                     ?: EngineSettingsStore.isTyranoScopedSaveDir(appContext)
                 if (scoped) {
@@ -60,13 +72,19 @@ class GameSaveManager(private val context: Context) {
                         ?: return SaveLocation(null, "Tyrano 应用独立存储目录不可用", false)
                     SaveLocation(
                         File(File(File(external, "save"), "tyrano"), EngineScanner.safeSaveName(root)),
-                        "Tyrano 应用独立存档目录",
+                        "${game.engine.displayName} 应用独立存档目录",
                         true,
                     )
                 } else {
-                    SaveLocation(File(root, "savedata"), "Tyrano 游戏内存档目录", true)
+                    SaveLocation(
+                        File(root, "savedata"),
+                        "${game.engine.displayName} 游戏内存档目录",
+                        true,
+                    )
                 }
             }
+            EngineType.VN, EngineType.WEB_OTHER ->
+                SaveLocation(null, "${game.engine.displayName} 没有标准文件存档接口", false)
             EngineType.ARTEMIS -> SaveLocation(File(root), "Artemis 游戏目录存档", true)
             EngineType.UNKNOWN -> SaveLocation(null, "未知引擎不支持存档管理", false)
         }
@@ -126,26 +144,36 @@ class GameSaveManager(private val context: Context) {
      */
     fun cleanupAppData(game: ScanGame) {
         val root = resolveGameDirectory(game) ?: return
-        val target = when (game.engine) {
+        val targets = when (game.engine) {
             EngineType.KIRIKIRI -> {
                 val internal = appContext.filesDir ?: return
-                File(File(internal, "krkr_mirror"), EngineScanner.safeSaveName(root))
+                val targetList = mutableListOf(
+                    File(File(internal, "krkr_mirror"), EngineScanner.safeSaveName(root)),
+                )
+                appContext.getExternalFilesDir(null)?.let { external ->
+                    targetList += File(File(external, "save"), EngineScanner.safeSaveName(root))
+                }
+                targetList
             }
             EngineType.ONS -> {
                 val external = appContext.getExternalFilesDir(null) ?: return
-                File(File(external, "save"), File(root).name)
+                listOf(File(File(external, "save"), File(root).name))
             }
-            EngineType.TYRANO -> {
+            EngineType.TYRANO,
+            EngineType.RPG_MV,
+            EngineType.RPG_MZ -> {
                 val external = appContext.getExternalFilesDir(null) ?: return
-                File(File(File(external, "save"), "tyrano"), EngineScanner.safeSaveName(root))
+                listOf(File(File(File(external, "save"), "tyrano"), EngineScanner.safeSaveName(root)))
             }
             else -> return
         }
         val appInternal = appContext.filesDir.canonicalPath + File.separator
         val appExternal = appContext.getExternalFilesDir(null)?.canonicalPath
-        val inAppStorage = target.canonicalPath.startsWith(appInternal) ||
-            (appExternal != null && target.canonicalPath.startsWith(appExternal + File.separator))
-        if (inAppStorage) target.deleteRecursively()
+        targets.forEach { target ->
+            val inAppStorage = target.canonicalPath.startsWith(appInternal) ||
+                (appExternal != null && target.canonicalPath.startsWith(appExternal + File.separator))
+            if (inAppStorage) target.deleteRecursively()
+        }
     }
 
     private fun resolveGameDirectory(game: ScanGame): String? {
@@ -163,6 +191,16 @@ class GameSaveManager(private val context: Context) {
             if (override.has("scopedsavedir")) ons = ons.copy(scopedSaveDir = override.optBoolean("scopedsavedir"))
         }
         return ons.scopedSaveDir
+    }
+
+    private fun effectiveKrKernel(game: ScanGame, root: String): String {
+        val requested = PerGameSettingsStore.getStr(appContext, game.uri, PerGameSettingsStore.F_ENGINE_KERNEL)
+            ?: EngineSettingsStore.getKrKernel(appContext)
+        return if (EngineScanner.isRemovableStoragePath(root) && requested == EngineSettingsStore.KERNEL_KRKRSDL3) {
+            EngineSettingsStore.KERNEL_KIRIKIRI2
+        } else {
+            requested
+        }
     }
 
     private fun collectFiles(directory: File, out: MutableList<File>, exclude: (String) -> Boolean) {

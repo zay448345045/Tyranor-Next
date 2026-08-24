@@ -25,10 +25,14 @@ internal class TyranoLocalHttpServer(
     root: File,
     asar: AsarArchive?,
     tyranoHook: ByteArray?,
+    private val injectBeforeBody: Boolean = false,
+    scriptAppends: Map<String, ByteArray> = emptyMap(),
 ) : Runnable {
     private val root: File
     private val asar: AsarArchive?
     private val tyranoHook: ByteArray
+    private val asarRootPrefix: String
+    private val scriptAppends: Map<String, ByteArray> = scriptAppends.mapKeys { it.key.lowercase(Locale.ROOT) }
     private val serverSocket: ServerSocket
     private val thread: Thread
     @Volatile
@@ -39,6 +43,13 @@ internal class TyranoLocalHttpServer(
         this.root = root.canonicalFile
         this.asar = asar
         this.tyranoHook = tyranoHook ?: ByteArray(0)
+        this.asarRootPrefix = when {
+            asar == null || asar.has("index.html") -> ""
+            asar.has("www/index.html") -> "www/"
+            asar.has("app/index.html") -> "app/"
+            asar.has("resources/app/index.html") -> "resources/app/"
+            else -> ""
+        }
         this.serverSocket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
         this.thread = Thread(this, "YukiTyranoLocalHttpServer").apply { isDaemon = true }
         this.clients = ThreadPoolExecutor(
@@ -49,7 +60,12 @@ internal class TyranoLocalHttpServer(
         )
     }
 
-    constructor(root: File, tyranoHook: ByteArray?) : this(root, null, tyranoHook)
+    constructor(
+        root: File,
+        tyranoHook: ByteArray?,
+        injectBeforeBody: Boolean = false,
+        scriptAppends: Map<String, ByteArray> = emptyMap(),
+    ) : this(root, null, tyranoHook, injectBeforeBody, scriptAppends)
 
     fun start() { thread.start() }
     val port: Int get() = serverSocket.localPort
@@ -110,11 +126,16 @@ internal class TyranoLocalHttpServer(
             }
             if (resolved.data != null) {
                 if (isIndexHtml(uri)) sendInjectedIndex(socket, resolved.data, method.equals("HEAD", true))
+                else if (hasScriptAppend(uri)) sendAppendedBytes(socket, resolved.data, uri, method.equals("HEAD", true))
                 else sendBytes(socket, resolved.data, uri, method.equals("HEAD", true))
                 return
             }
             if (isIndexHtml(uri, resolved.file)) {
                 sendInjectedIndex(socket, resolved.file!!, method.equals("HEAD", true))
+                return
+            }
+            if (hasScriptAppend(uri)) {
+                sendAppendedFile(socket, resolved.file!!, uri, method.equals("HEAD", true))
                 return
             }
             sendFile(socket, resolved.file, headers["range"], method.equals("HEAD", true))
@@ -145,7 +166,7 @@ internal class TyranoLocalHttpServer(
             if (target != null) { Log.i(TAG, "resource fallback rpgmvm->rpgmvo $uri -> $alt"); return ResolvedFile(target, null) }
         }
         if (asar != null) {
-            val data = asar.read(uri)
+            val data = asar.read(asarRootPrefix + uri) ?: asar.read(uri)
             if (data != null) return ResolvedFile(null, data)
             if (uri.equals("index.html", true) || uri.equals("index.htm", true)) {
                 var indexBytes = asar.read("index.html")
@@ -222,10 +243,15 @@ internal class TyranoLocalHttpServer(
 
     private fun sendInjectedIndex(socket: Socket, html: String?, headOnly: Boolean) {
         var htmlText = html ?: ""
-        val script = if (tyranoHook.isNotEmpty()) String(tyranoHook, StandardCharsets.UTF_8) else fallbackTyranoHook()
+        if (tyranoHook.isEmpty()) {
+            sendBytes(socket, htmlText.toByteArray(StandardCharsets.UTF_8), "index.html", headOnly)
+            return
+        }
+        val script = String(tyranoHook, StandardCharsets.UTF_8)
         val injected = "\n<script type='text/javascript'>\n$script\n</script>\n"
         val lower = htmlText.lowercase(Locale.ROOT)
-        val pos = lower.indexOf("</head>")
+        val marker = if (injectBeforeBody) "</body>" else "</head>"
+        val pos = lower.indexOf(marker)
         htmlText = if (pos >= 0) htmlText.substring(0, pos) + injected + htmlText.substring(pos) else injected + htmlText
         val data = htmlText.toByteArray(StandardCharsets.UTF_8)
         Log.i(TAG, "served injected index bytes=${data.size} hook=${tyranoHook.size}")
@@ -233,6 +259,22 @@ internal class TyranoLocalHttpServer(
         out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: ${data.size}\r\nConnection: close\r\n\r\n").toByteArray(StandardCharsets.UTF_8))
         if (!headOnly) out.write(data)
         out.flush()
+    }
+
+    private fun hasScriptAppend(uri: String): Boolean = scriptAppends.containsKey(uri.lowercase(Locale.ROOT))
+
+    private fun sendAppendedFile(socket: Socket, file: File, uri: String, headOnly: Boolean) {
+        sendAppendedBytes(socket, file.readBytes(), uri, headOnly)
+    }
+
+    private fun sendAppendedBytes(socket: Socket, original: ByteArray, uri: String, headOnly: Boolean) {
+        val append = scriptAppends[uri.lowercase(Locale.ROOT)] ?: ByteArray(0)
+        val data = ByteArray(original.size + append.size).also {
+            original.copyInto(it)
+            append.copyInto(it, original.size)
+        }
+        Log.i(TAG, "served patched script uri=$uri original=${original.size} append=${append.size}")
+        sendBytes(socket, data, uri, headOnly)
     }
 
     private fun readTextFile(file: File): String {
@@ -246,11 +288,6 @@ internal class TyranoLocalHttpServer(
             try { inStream.close() } catch (_: Throwable) {}
         }
         return String(out.toByteArray(), StandardCharsets.UTF_8)
-    }
-
-    private fun fallbackTyranoHook(): String {
-        return "var _tyrano_player={pauseAllAudio:function(){try{var b=TYRANO.kag.tmp.map_bgm;for(var k in b)b[k].pause();var s=TYRANO.kag.tmp.map_se;for(var k2 in s)s[k2].pause();}catch(e){}},resumeAllAudio:function(){try{var b=TYRANO.kag.tmp.map_bgm;if(b[TYRANO.kag.stat.current_bgm])b[TYRANO.kag.stat.current_bgm].play();else if(b[0])b[0].play();}catch(e){}}};" +
-            "window.tyrano_save=window.tyrano_save||{};if(window.$){$.setStorage=function(key,val,type){if('appJsInterface' in window){appJsInterface.setStorage(key,escape(JSON.stringify(val)));}else{window.tyrano_save[key]=encodeURIComponent(JSON.stringify(val));location.href='tyranoplayer-save://?key='+key+'&data='+encodeURIComponent(JSON.stringify(val));}};$.getStorage=function(key,type){if('appJsInterface' in window){try{var s=appJsInterface.getStorage(key);return s==''?null:unescape(s);}catch(e){return null;}}else{if(!window.tyrano_save[key]||window.tyrano_save[key]==''){return null;}return decodeURIComponent(window.tyrano_save[key]);}};$.openWebFromApp=function(url){if('appJsInterface' in window){appJsInterface.openUrl(url);}else{location.href='tyranoplayer-web://?url='+url;}};}"
     }
 
     private fun sendFile(socket: Socket, file: File?, rangeHeader: String?, headOnly: Boolean) {

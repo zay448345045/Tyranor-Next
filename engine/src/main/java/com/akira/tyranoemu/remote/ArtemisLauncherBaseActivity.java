@@ -4,7 +4,9 @@ import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
 import android.content.Intent;
+import android.view.KeyEvent;
 
+import com.core.engine.DoubleBackExit;
 import com.core.engine.EnginePrefs;
 
 public abstract class ArtemisLauncherBaseActivity extends com.ies_net.artemis.ArtemisActivity {
@@ -12,6 +14,7 @@ public abstract class ArtemisLauncherBaseActivity extends com.ies_net.artemis.Ar
     private static final String KEY_ARTEMIS_ENGINE_PREFIX = "artemis_engine.";
     private long createdAtElapsed;
     private boolean userRequestedFinish;
+    private Object backInvokedCallback;
     /** Loads the revision-specific Artemis native library (e.g. libartemis.so). Called once from onCreate. */
     public abstract void loadEngineLibrary();
 
@@ -33,6 +36,7 @@ public abstract class ArtemisLauncherBaseActivity extends com.ies_net.artemis.Ar
     public final void onCreate(Bundle bundle) {
         super.onCreate(bundle);
         createdAtElapsed = SystemClock.elapsedRealtime();
+        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
         Log.i("YukiArtemis", "onCreate path=" + (getIntent() == null ? null : getIntent().getStringExtra("path")) + " scoped=" + (getIntent() != null && getIntent().getBooleanExtra("scopedSaveDir", false)) + " saveName=" + (getIntent() == null ? null : getIntent().getStringExtra("scopedSaveName")));
         loadEngineLibrary();
     }
@@ -51,13 +55,25 @@ public abstract class ArtemisLauncherBaseActivity extends com.ies_net.artemis.Ar
     }
 
     @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (DoubleBackExit.dispatchBackKey(this, event, this::exitFromBack)) return true;
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     public void onBackPressed() {
+        DoubleBackExit.handleBack(this, this::exitFromBack);
+    }
+
+    private void exitFromBack() {
         userRequestedFinish = true;
         super.onBackPressed();
     }
 
     @Override
     protected void onDestroy() {
+        DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
+        DoubleBackExit.clear(this);
         // 兼容回退改为「先写 pref + 拉起下一版本（独立进程），再终结当前进程」：
         // V2/V3 在各自独立进程（:artemis.compat / :artemis.compat.v2）启动，当前进程
         // （无论正常退出还是早退回退）都直接终结，避免引擎 native 进程级全局状态

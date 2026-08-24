@@ -9,6 +9,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.view.Gravity
+import android.view.KeyEvent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -29,6 +30,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import com.core.engine.DoubleBackExit
 import com.core.engine.EnginePrefs
 import com.core.engine.EngineThemeColors
 import com.core.engine.R
@@ -50,11 +52,13 @@ class TyranoActivity : Activity() {
     private var gameRootFile: File? = null
     private var saveDirectory: File? = null
     private var gameUsesAsar = false
+    private var webGameType = WebGameType.TYRANO
     private var asarPath: String? = null
     private var asarArchive: AsarArchive? = null
     private var firstResume = true
     private var localServer: TyranoLocalHttpServer? = null
     private var allowExternalNetwork = false
+    private var backInvokedCallback: Any? = null
     private val processExitScheduled = AtomicBoolean(false)
 
     override fun attachBaseContext(newBase: Context) {
@@ -63,6 +67,7 @@ class TyranoActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this) { finish() }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enterFullscreen()
         allowExternalNetwork = getSharedPreferences(EnginePrefs.APP_PREFS, Context.MODE_PRIVATE)
@@ -78,20 +83,13 @@ class TyranoActivity : Activity() {
 
         val gameRoot = File(resolvedGameDir)
         gameRootFile = gameRoot
-        val saves = resolveSaveDirectory(intent, gameRoot)
-        saveDirectory = saves
-        if (!ensureWritableSaveDirectory(saves)) {
-            failLaunch(getString(R.string.engine_tyrano_unwritable_save_directory))
-            return
-        }
-        Log.i(TAG, "save directory=${saves!!.absolutePath} scoped=${intent.getBooleanExtra(EXTRA_SCOPED_SAVE_DIR, false)}")
 
         val entry = findTyranoEntry(gameRoot, 0)
         if (entry == null) {
             val rootAsar = File(gameRoot, "app.asar")
             val resourcesAsar = File(File(gameRoot, "resources"), "app.asar")
             val index = File(gameRoot, "index.html")
-            Log.e(TAG, "entry not found index=${index.absolutePath} app.asar=${rootAsar.absolutePath} resources/app.asar=${resourcesAsar.absolutePath} (searched subdirs: ${TYRANO_ENTRY_SUBDIRS.joinToString()})")
+            Log.e(TAG, "entry not found index=${index.absolutePath} app.asar=${rootAsar.absolutePath} resources/app.asar=${resourcesAsar.absolutePath} (searched subdirs: ${WEB_ENTRY_SUBDIRS.joinToString()})")
             failLaunch(getString(R.string.engine_tyrano_entry_not_found))
             return
         }
@@ -110,15 +108,40 @@ class TyranoActivity : Activity() {
                 return
             }
         }
-        Log.i(TAG, "entry mode=${if (gameUsesAsar) "asar" else "dir"} asar=$asarPath contentRoot=${contentRoot.absolutePath}")
+        webGameType = detectWebGameType(intent.getStringExtra("type"), contentRoot, asarArchive)
+        Log.i(TAG, "entry mode=${if (gameUsesAsar) "asar" else "dir"} type=${webGameType.intentValue} asar=$asarPath contentRoot=${contentRoot.absolutePath}")
+        val needsSaveBridge = webGameType == WebGameType.TYRANO ||
+            webGameType == WebGameType.RPG_MV || webGameType == WebGameType.RPG_MZ
+        val saves = if (needsSaveBridge) resolveSaveDirectory(intent, gameRoot) else null
+        saveDirectory = saves
+        if (needsSaveBridge && !ensureWritableSaveDirectory(saves)) {
+            failLaunch(getString(R.string.engine_tyrano_unwritable_save_directory))
+            return
+        }
+        Log.i(TAG, "save directory=${saves?.absolutePath ?: "none"} scoped=${intent.getBooleanExtra(EXTRA_SCOPED_SAVE_DIR, false)}")
 
         try {
-            val hook = assets.open(TYRANO_HOOK_ASSET).buffered().use { it.readBytes() }
-            Log.i(TAG, "asset loaded $TYRANO_HOOK_ASSET bytes=${hook.size}")
-            localServer = if (gameUsesAsar) {
-                TyranoLocalHttpServer(contentRoot, asarArchive, hook)
+            val hookAsset = when (webGameType) {
+                WebGameType.TYRANO -> TYRANO_HOOK_ASSET
+                WebGameType.RPG_MV -> RPG_MV_HOOK_ASSET
+                WebGameType.RPG_MZ -> RPG_MZ_HOOK_ASSET
+                WebGameType.VN, WebGameType.WEB_OTHER -> null
+            }
+            val hook = hookAsset?.let { assets.open(it).buffered().use { input -> input.readBytes() } } ?: ByteArray(0)
+            val scriptAppends = if (webGameType == WebGameType.RPG_MZ) {
+                mapOf(
+                    "js/rmmz_core.js" to loadAsset(RPG_MZ_CORE_HOOK_ASSET),
+                    "js/rmmz_managers.js" to loadAsset(RPG_MZ_MANAGERS_HOOK_ASSET),
+                )
             } else {
-                TyranoLocalHttpServer(contentRoot, hook)
+                emptyMap()
+            }
+            Log.i(TAG, "asset loaded ${hookAsset ?: "none"} bytes=${hook.size} scriptAppends=${scriptAppends.keys}")
+            val injectBeforeBody = webGameType == WebGameType.RPG_MV || webGameType == WebGameType.RPG_MZ
+            localServer = if (gameUsesAsar) {
+                TyranoLocalHttpServer(contentRoot, asarArchive, hook, injectBeforeBody, scriptAppends)
+            } else {
+                TyranoLocalHttpServer(contentRoot, hook, injectBeforeBody, scriptAppends)
             }.also { it.start() }
         } catch (error: Throwable) {
             Log.e(TAG, "start local server failed", error)
@@ -139,7 +162,12 @@ class TyranoActivity : Activity() {
         setContentView(root)
 
         configureWebView(browser)
-        browser.addJavascriptInterface(TyranoJsBridge(saves), JS_BRIDGE_NAME)
+        when (webGameType) {
+            WebGameType.RPG_MV, WebGameType.RPG_MZ ->
+                browser.addJavascriptInterface(RpgMakerSaveBridge(saves), RPG_MAKER_SAVE_BRIDGE_NAME)
+            WebGameType.TYRANO -> browser.addJavascriptInterface(TyranoJsBridge(saves), JS_BRIDGE_NAME)
+            WebGameType.VN, WebGameType.WEB_OTHER -> Unit
+        }
         val url = "http://localhost:${requireNotNull(localServer).port}/index.html"
         Log.i(TAG, "loadUrl=$url")
         browser.loadUrl(url)
@@ -148,6 +176,28 @@ class TyranoActivity : Activity() {
     private fun failLaunch(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         finish()
+    }
+
+    private fun loadAsset(name: String): ByteArray = assets.open(name).buffered().use { it.readBytes() }
+
+    private fun detectWebGameType(explicitType: String?, contentRoot: File, asar: AsarArchive?): WebGameType {
+        if (asar != null) {
+            fun has(vararg paths: String): Boolean = paths.any { asar.has(it) || asar.isDirectory(it) }
+            return when {
+                has("tyrano", "www/tyrano", "tyrano/tyrano.js", "www/tyrano/tyrano.js") -> WebGameType.TYRANO
+                has("js/rpg_core.js", "www/js/rpg_core.js") -> WebGameType.RPG_MV
+                has("js/rmmz_core.js", "www/js/rmmz_core.js") -> WebGameType.RPG_MZ
+                has("globalData.vndata", "www/globalData.vndata") -> WebGameType.VN
+                else -> WebGameType.WEB_OTHER
+            }
+        }
+        return when {
+            File(contentRoot, "tyrano").isDirectory -> WebGameType.TYRANO
+            File(contentRoot, "js/rpg_core.js").isFile -> WebGameType.RPG_MV
+            File(contentRoot, "js/rmmz_core.js").isFile -> WebGameType.RPG_MZ
+            File(contentRoot, "globalData.vndata").isFile -> WebGameType.VN
+            else -> WebGameType.fromIntent(explicitType)
+        }
     }
 
     private fun configureWebView(browser: WebView) {
@@ -403,12 +453,12 @@ class TyranoActivity : Activity() {
 
     @Deprecated("Deprecated in Android")
     override fun onBackPressed() {
-        showEngineConfirm(
-            getString(R.string.engine_exit_game),
-            getString(R.string.engine_exit_game_message),
-            getString(R.string.engine_exit_game),
-            ::finish,
-        )
+        DoubleBackExit.handleBack(this) { finish() }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (DoubleBackExit.dispatchBackKey(this, event) { finish() }) return true
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onPause() {
@@ -427,6 +477,8 @@ class TyranoActivity : Activity() {
     }
 
     override fun onDestroy() {
+        DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback)
+        DoubleBackExit.clear(this)
         runCatching {
             webView?.stopLoading()
             webView?.loadUrl("about:blank")
@@ -604,7 +656,7 @@ class TyranoActivity : Activity() {
      * 递归查找 Tyrano 游戏入口（index.html 或 app.asar）。
      *
      * 根目录优先匹配 app.asar / resources/app.asar / index.html；未命中时按
-     * [TYRANO_ENTRY_SUBDIRS] 列表递归搜索子目录，与启动器侧的引擎特征探测子目录保持一致，
+     * [WEB_ENTRY_SUBDIRS] 列表递归搜索子目录，与启动器侧的引擎特征探测子目录保持一致，
      * 避免扫描器识别成功但启动器找不到入口而闪退。
      *
      * @param dir 当前搜索目录。
@@ -619,12 +671,18 @@ class TyranoActivity : Activity() {
         dir.resolve("resources/app.asar").takeIf { it.isFile }?.let {
             return TyranoEntry(dir, it.absolutePath)
         }
+        dir.resolve("app.asar").takeIf { it.isDirectory && it.resolve("index.html").isFile }?.let {
+            return TyranoEntry(it, null)
+        }
+        dir.resolve("resources/app.asar").takeIf { it.isDirectory && it.resolve("index.html").isFile }?.let {
+            return TyranoEntry(it, null)
+        }
         dir.resolve("index.html").takeIf { it.isFile }?.let {
             return TyranoEntry(dir, null)
         }
         // 达到最大深度后不再递归
         if (depth >= MAX_ENTRY_SEARCH_DEPTH) return null
-        for (name in TYRANO_ENTRY_SUBDIRS) {
+        for (name in WEB_ENTRY_SUBDIRS) {
             val sub = dir.resolve(name)
             if (!sub.isDirectory) continue
             findTyranoEntry(sub, depth + 1)?.let { return it }
@@ -658,15 +716,48 @@ class TyranoActivity : Activity() {
         @JavascriptInterface fun audio(value: String?) = Unit
     }
 
+    /** RPG Maker MV/MZ 的 StorageManager 兼容桥，接口名与旧项目保持一致。 */
+    inner class RpgMakerSaveBridge(private val saveDirectory: File?) {
+        @JavascriptInterface
+        fun Save(key: String?, base64Data: String?) =
+            TyranoStorage.write(saveDirectory, key, base64Data, RPG_MV_SAVE_EXTENSION)
+
+        @JavascriptInterface
+        fun Load(key: String?): String = TyranoStorage.read(saveDirectory, key, RPG_MV_SAVE_EXTENSION)
+
+        @JavascriptInterface
+        fun Exists(key: String?): Boolean = TyranoStorage.exists(saveDirectory, key, RPG_MV_SAVE_EXTENSION)
+    }
+
+    private enum class WebGameType(val intentValue: String) {
+        TYRANO("Tyrano"),
+        RPG_MV("RPG"),
+        RPG_MZ("RMMZ"),
+        VN("VN"),
+        WEB_OTHER("WebOther");
+
+        companion object {
+            fun fromIntent(value: String?): WebGameType = entries.firstOrNull {
+                it.intentValue.equals(value, ignoreCase = true)
+            } ?: TYRANO
+        }
+    }
+
     companion object {
         private const val TAG = "YukiTyrano"
         private const val TYRANO_HOOK_ASSET = "__tyrano__.js"
+        private const val RPG_MV_HOOK_ASSET = "__rpg__.js"
+        private const val RPG_MZ_HOOK_ASSET = "__rmmz__.js"
+        private const val RPG_MZ_CORE_HOOK_ASSET = "__hook_rmmz_core.js"
+        private const val RPG_MZ_MANAGERS_HOOK_ASSET = "__hook_rmmz_managers.js"
         private const val JS_BRIDGE_NAME = "appJsInterface"
+        private const val RPG_MAKER_SAVE_BRIDGE_NAME = "saveDataManager"
+        private const val RPG_MV_SAVE_EXTENSION = ".bin"
         private const val EXTRA_SCOPED_SAVE_DIR = "scopedSaveDir"
         private const val EXTRA_SCOPED_SAVE_ROOT = "scopedSaveRoot"
         private const val PROCESS_EXIT_DELAY_MS = 500L
         private const val MAX_ENTRY_SEARCH_DEPTH = 2
-        private val TYRANO_ENTRY_SUBDIRS = arrayOf("resources", "app", "tyrano", "data", "scenario", "system", "game")
+        private val WEB_ENTRY_SUBDIRS = arrayOf("www", "resources", "app.asar", "app", "tyrano", "data", "scenario", "system", "game")
 
         private const val KEY_UI_FONT_SCALE = "ui_font_scale"
         private const val KEY_UI_SCALE = "ui_scale"

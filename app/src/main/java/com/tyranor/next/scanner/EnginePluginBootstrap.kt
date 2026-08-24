@@ -62,7 +62,12 @@ object EnginePluginBootstrap {
             EngineType.KIRIKIRI -> NativePluginConstants.ENGINE_KIRIKIROID2
             EngineType.ONS -> NativePluginConstants.ENGINE_ONS
             EngineType.ARTEMIS -> NativePluginConstants.ENGINE_ARTEMIS
-            EngineType.TYRANO, EngineType.UNKNOWN -> return null
+            EngineType.TYRANO,
+            EngineType.RPG_MV,
+            EngineType.RPG_MZ,
+            EngineType.VN,
+            EngineType.WEB_OTHER,
+            EngineType.UNKNOWN -> return null
         }
         val app = context.applicationContext
         val spec = engines.firstOrNull { it.engineId == engineId }

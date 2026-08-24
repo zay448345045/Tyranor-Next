@@ -27,6 +27,7 @@ import android.view.ViewGroup;
 
 import org.libsdl.app.SDLActivity;
 
+import com.core.engine.DoubleBackExit;
 import com.core.ons.OnsLibLoader;
 import com.core.ons.OnsSettings;
 import com.core.ons.OnsVideoActivity;
@@ -106,14 +107,19 @@ public class ONScripter extends SDLActivity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            if (event.getAction() == KeyEvent.ACTION_UP) onBackPressed();
-            return true;
-        }
+        if (DoubleBackExit.dispatchBackKey(this, event, this::sendEscToOns)) return true;
         return super.dispatchKeyEvent(event);
     }
 
     @Override public void onBackPressed() {
+        DoubleBackExit.handleBack(this, this::sendEscToOns);
+    }
+
+    @Override protected void exitFromBack() {
+        sendEscToOns();
+    }
+
+    private void sendEscToOns() {
         Log.d(TAG, "send ESC to ONS");
         try {
             SDLActivity.onNativeKeyDown(KeyEvent.KEYCODE_ESCAPE);

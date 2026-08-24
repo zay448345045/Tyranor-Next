@@ -16,6 +16,7 @@ object AppSettingsStore {
     const val KEY_SCAN_DEPTH = "scan_depth"
     const val KEY_THEME_MODE = "theme_mode"
     const val KEY_TONE_SWITCH = "tone_switch"
+    const val KEY_GAME_SORT = "game_sort"
 
     /** 默认主题色：#307DEF，与 theme/Color.kt 的 Blue40 一致。 */
     const val DEFAULT_THEME_COLOR = "#307DEF"
@@ -32,6 +33,12 @@ object AppSettingsStore {
     /** 文件夹扫描深度默认值（层级，1..5）。 */
     const val DEFAULT_SCAN_DEPTH = 3
 
+    /** 游戏排序：按标题字母/字符顺序。 */
+    const val GAME_SORT_ALPHA = "alpha"
+
+    /** 游戏排序：按标题中 【】/[] 标签内容分组。 */
+    const val GAME_SORT_BRACKET_TAG = "bracket_tag"
+
     /** 底部导航栏样式：默认。 */
     const val NAV_STYLE_DEFAULT = "default"
 
@@ -41,9 +48,16 @@ object AppSettingsStore {
     /** 导航栏样式内存态：随设置页切换即时广播，供 MainScreen 重组切换样式。 */
     val navStyleState: MutableState<String> = mutableStateOf(NAV_STYLE_DEFAULT)
 
+    /** 游戏排序内存态：设置页切换后游戏页可随重组读取。 */
+    val gameSortState: MutableState<String> = mutableStateOf(GAME_SORT_ALPHA)
+
     /** 首次组合时从持久化加载导航栏样式到内存态（幂等，重复调用仅重新读一次）。 */
     fun initNavStyle(c: Context) {
         navStyleState.value = getNavStyle(c)
+    }
+
+    fun initGameSort(c: Context) {
+        gameSortState.value = getGameSort(c)
     }
 
     private fun prefs(context: Context) =
@@ -71,6 +85,21 @@ object AppSettingsStore {
 
     fun setScanDepth(c: Context, depth: Int) =
         prefs(c).edit().putInt(KEY_SCAN_DEPTH, depth.coerceIn(1, 5)).apply()
+
+    fun getGameSort(c: Context): String =
+        when (prefs(c).getString(KEY_GAME_SORT, GAME_SORT_ALPHA)) {
+            GAME_SORT_BRACKET_TAG -> GAME_SORT_BRACKET_TAG
+            else -> GAME_SORT_ALPHA
+        }
+
+    fun setGameSort(c: Context, sort: String) {
+        val normalized = when (sort) {
+            GAME_SORT_BRACKET_TAG -> GAME_SORT_BRACKET_TAG
+            else -> GAME_SORT_ALPHA
+        }
+        prefs(c).edit().putString(KEY_GAME_SORT, normalized).apply()
+        gameSortState.value = normalized
+    }
 
     /** 外观模式（跟随系统/浅色/深色）。 */
     fun getThemeMode(c: Context): String =

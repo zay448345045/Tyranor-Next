@@ -22,7 +22,7 @@ object NativeBridge {
     @JvmStatic external fun isLaunchSceneReady(so: String?): Boolean
     @JvmStatic external fun launch(so: String?, path: String?, useMaps: Boolean): Boolean
     @JvmStatic external fun interceptor(prefix: String?): Unit
-    @JvmStatic external fun relocate(): Unit
+    @JvmStatic external fun relocate(): Int
     @JvmStatic external fun write(path: String?, data: ByteArray?): Boolean
 
     @JvmStatic
@@ -42,6 +42,9 @@ object NativeBridge {
     fun open(path: String?, mode: Int): Int {
         val normalized = KrPathUtils.canonicalizeKrStoragePath(KrPathUtils.normalizeFilePath(path))
         val redirected = KrPathUtils.redirectScopedSavePath(normalized)
+        // The native hook uses the stable storage-volume prefix because KRKR may lowercase
+        // the game path. Keep regular asset I/O native; only scoped saves need Java redirection.
+        if (redirected == null && !isSafFallbackEnabled()) return -1
         val target = if (redirected != null) redirected else normalized ?: return -1
         val javaMode: String = try {
             toJavaMode(mode)
@@ -51,8 +54,13 @@ object NativeBridge {
         }
         return try {
             val raf = RandomAccessFile(File(target), javaMode)
+            if ((mode and OsConstants.O_TRUNC) == OsConstants.O_TRUNC) raf.setLength(0)
+            if ((mode and OsConstants.O_APPEND) == OsConstants.O_APPEND) raf.seek(raf.length())
             val fd = getFd(raf)
             raf.close()
+            if (redirected != null) recordOpenDiagnostic(
+                "ok path=$path target=$target flags=$mode mode=$javaMode fd=$fd",
+            )
             Log.i("NativeBridge", "open $fd $javaMode $path")
             fd
         } catch (directError: Throwable) {
@@ -60,8 +68,26 @@ object NativeBridge {
                 val safFd = openViaSaf(target, mode, directError)
                 if (safFd >= 0) return safFd
             }
+            if (redirected != null) recordOpenDiagnostic(
+                "failed path=$path target=$target flags=$mode mode=$javaMode " +
+                    "error=${directError.javaClass.simpleName}:${directError.message}",
+            )
             Log.e("NativeBridge", "open failed mode=$mode path=$path", directError)
             -1
+        }
+    }
+
+    @JvmStatic
+    fun redirect(path: String?): String? {
+        val normalized = KrPathUtils.canonicalizeKrStoragePath(KrPathUtils.normalizeFilePath(path))
+        return KrPathUtils.redirectScopedSavePath(normalized)
+    }
+
+    private fun recordOpenDiagnostic(value: String) {
+        try {
+            KrPathUtils.currentActivity()?.getSharedPreferences("krkr_bridge_diagnostics", 0)
+                ?.edit()?.putString("last_open", value)?.commit()
+        } catch (_: Throwable) {
         }
     }
 

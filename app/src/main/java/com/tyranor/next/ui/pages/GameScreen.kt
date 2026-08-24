@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -65,6 +66,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.tyranor.next.R
 import com.tyranor.next.scanner.EngineLauncher
@@ -74,9 +76,10 @@ import com.tyranor.next.scanner.GameSaveManager
 import com.tyranor.next.scanner.ScanGame
 import com.tyranor.next.scanner.VndbCandidate
 import com.tyranor.next.scanner.VndbCoverService
+import com.tyranor.next.settings.AppSettingsStore
 import com.tyranor.next.settings.PerGameSettingsStore
 import com.tyranor.next.theme.NavWhite
-import com.tyranor.next.theme.MiuixSettingsTheme
+import com.tyranor.next.ui.common.AppSearchField
 import com.tyranor.next.ui.common.glassNavBottomInset
 import com.tyranor.next.ui.common.isWideScreen
 import com.tyranor.next.theme.PageGrey
@@ -84,19 +87,20 @@ import com.tyranor.next.ui.common.TopBarIcon
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.InputField
-import top.yukonga.miuix.kmp.basic.SearchBar
 import java.io.File
+import java.util.Locale
 
 @Composable
 fun GameScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    AppSettingsStore.initGameSort(context)
 
     var games by remember { mutableStateOf(EngineScanner.loadGames(context)) }
     var scanning by remember { mutableStateOf(false) }
     var selectedGame by remember { mutableStateOf<ScanGame?>(null) }
-    var quickLaunchTarget by remember { mutableStateOf<ScanGame?>(null) }
+    var launchError by remember { mutableStateOf<String?>(null) }
+    var patchLaunchTarget by remember { mutableStateOf<ScanGame?>(null) }
 
     val gridState = rememberLazyGridState()
 
@@ -128,9 +132,12 @@ fun GameScreen(modifier: Modifier = Modifier) {
             val current = games
             val updated = withContext(Dispatchers.IO) {
                 current.map { game ->
-                    val next = runCatching { VndbCoverService.fetchBestCover(context, game) }.getOrNull()
+                    val local = runCatching { EngineScanner.applyLocalCover(context, game) }.getOrDefault(game)
+                    val next = runCatching { VndbCoverService.fetchBestCover(context, local) }.getOrNull()
                     if (next != null && next.coverUri != game.coverUri) {
                         next
+                    } else if (local.coverUri != game.coverUri) {
+                        local
                     } else {
                         game
                     }
@@ -142,21 +149,18 @@ fun GameScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // 扫描游戏库：无数据时全量扫描；已有数据时增量扫描（保留现有游戏，
-    // 遍历时剪枝跳过已识别游戏目录，只发现新游戏），避免每次全量重扫。
+    // 扫描游戏库：每次按扫描目录全量重建，删除/改名/移动后的旧缓存条目会被清理。
     fun scanLibrary() {
         if (scanning) return
         scope.launch {
             scanning = true
             val roots = EngineScanner.loadRoots(context)
             if (roots.isNotEmpty()) {
-                val updated = if (games.isEmpty()) {
-                    EngineScanner.scanAll(context)
-                } else {
-                    EngineScanner.incrementalScan(context)
-                }
-                EngineScanner.saveGames(context, updated)
+                val updated = EngineScanner.rescanLibrary(context)
                 games = updated
+                selectedGame = selectedGame?.let { selected ->
+                    updated.firstOrNull { it.uri == selected.uri }
+                }
             }
             scanning = false
         }
@@ -171,7 +175,7 @@ fun GameScreen(modifier: Modifier = Modifier) {
                         android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                 )
             }
-            // 保存根目录后立即扫描（有数据时增量）
+            // 保存根目录后立即全量扫描
             EngineScanner.saveRoot(context, u)
             scanLibrary()
         }
@@ -186,7 +190,13 @@ fun GameScreen(modifier: Modifier = Modifier) {
         syncMissingCovers = { syncMissingCovers() },
         refreshGames = { scanLibrary() },
         onGameClick = { selectedGame = it },
-        onGameLongClick = { quickLaunchTarget = it },
+        onGameLongClick = { game ->
+            if (EngineLauncher.needsArtemisPatchConfirm(context, game)) {
+                patchLaunchTarget = game
+            } else {
+                launchError = EngineLauncher.launch(context, game)
+            }
+        },
     )
 
     // ===== 点击游戏卡片的底部抽屉栏 =====
@@ -203,41 +213,80 @@ fun GameScreen(modifier: Modifier = Modifier) {
         )
     }
 
-    // ===== 长按游戏卡片：加入/移除首页快捷启动 =====
-    quickLaunchTarget?.let { game ->
-        val already = EngineScanner.isQuickLaunched(context, game.uri)
+    // ===== 长按游戏卡片：启动游戏；Artemis 按既有策略弹出补丁确认 =====
+    patchLaunchTarget?.let { game ->
         AppAlertDialog(
-            onDismissRequest = { quickLaunchTarget = null },
+            onDismissRequest = { patchLaunchTarget = null },
             title = {
                 Text(
-                    if (already) "移除快捷启动" else "加入快捷启动",
+                    "应用自动补丁",
                     style = MaterialTheme.typography.titleMedium,
                 )
             },
             text = {
                 Text(
-                    if (already) "将「${game.title}」从首页快捷启动中移除？" else "将「${game.title}」加入首页快捷启动？",
+                    "「${game.title}」的启动文件打包在 .pfs 归档内，首次启动需要解出少量基础文件" +
+                        "（system.ini、窗口配置与视频）并适配 Android 平台。是否应用补丁？",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (already) {
-                            EngineScanner.removeQuickLaunch(context, game.uri)
-                        } else if (!EngineScanner.addQuickLaunch(context, game)) {
-                            android.widget.Toast.makeText(context, "首页快捷启动已满（最多 3 个）", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        quickLaunchTarget = null
+                        patchLaunchTarget = null
+                        launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.ALWAYS)
                     },
-                ) { Text("确定") }
+                ) { Text("总是") }
             },
             dismissButton = {
-                TextButton(onClick = { quickLaunchTarget = null }) { Text("取消") }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            patchLaunchTarget = null
+                            launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.NEVER)
+                        },
+                    ) { Text("不再") }
+                    TextButton(
+                        onClick = {
+                            patchLaunchTarget = null
+                            launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.ONCE)
+                        },
+                    ) { Text("本次") }
+                }
+            },
+        )
+    }
+
+    launchError?.let { message ->
+        AppAlertDialog(
+            onDismissRequest = { launchError = null },
+            title = { Text("启动失败", style = MaterialTheme.typography.titleMedium) },
+            text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = { launchError = null }) { Text("确定") }
             },
         )
     }
 }
+
+private fun sortGames(games: List<ScanGame>, sortMode: String): List<ScanGame> {
+    return when (sortMode) {
+        AppSettingsStore.GAME_SORT_BRACKET_TAG -> games.sortedWith(
+            compareBy<ScanGame> { bracketTag(it.title).isBlank() }
+                .thenBy { bracketTag(it.title).lowercase(Locale.ROOT) }
+                .thenBy { titleSortKey(it.title) },
+        )
+        else -> games.sortedBy { titleSortKey(it.title) }
+    }
+}
+
+private fun bracketTag(title: String): String {
+    val match = Regex("""【([^】]+)】|\[([^\]]+)]""").find(title) ?: return ""
+    return (match.groups[1]?.value ?: match.groups[2]?.value).orEmpty().trim()
+}
+
+private fun titleSortKey(title: String): String =
+    title.lowercase(Locale.ROOT).trim()
 
 /** 删除游戏后清理应用内关联数据（设置/最近记录/快捷启动/封面/存档镜像），绝不触碰游戏文件。 */
 internal fun cleanupDeletedGame(context: android.content.Context, target: ScanGame) {
@@ -285,9 +334,11 @@ private fun GameLibraryContent(
 ) {
     var showSearch by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    val filteredGames = remember(games, query) {
+    val gameSort = AppSettingsStore.gameSortState.value
+    val sortedGames = remember(games, gameSort) { sortGames(games, gameSort) }
+    val filteredGames = remember(sortedGames, query) {
         val q = query.trim()
-        if (q.isEmpty()) games else games.filter { it.title.contains(q, ignoreCase = true) }
+        if (q.isEmpty()) sortedGames else sortedGames.filter { it.title.contains(q, ignoreCase = true) }
     }
 
     Column(modifier.fillMaxSize()) {
@@ -318,25 +369,11 @@ private fun GameLibraryContent(
                 }
                 // 搜索框：点击搜索按钮后出现在顶部栏下方
                 if (showSearch) {
-                    MiuixSettingsTheme {
-                        SearchBar(
-                            inputField = {
-                                InputField(
-                                    query = query,
-                                    onQueryChange = { query = it },
-                                    onSearch = { },
-                                    expanded = false,
-                                    onExpandedChange = { },
-                                    label = "搜索游戏",
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            },
-                            expanded = false,
-                            onExpandedChange = { },
-                            modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
-                            content = {},
-                        )
-                    }
+                    AppSearchField(
+                        query = query,
+                        onQueryChange = { query = it },
+                        modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
+                    )
                 }
             }
         }
@@ -402,6 +439,7 @@ internal fun GameActionsSheet(
     var showVndbSearch by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showLaunchFilePicker by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
     var showPatchConfirm by remember { mutableStateOf(false) }
 
     // 发起启动；Artemis 需要 PFS 基础补丁且策略为“启动时询问”时，先弹窗确认再带选择启动
@@ -430,61 +468,93 @@ internal fun GameActionsSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.background,
     ) {
-        Text(
-            game.title,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-        )
-
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = GameActionsSheetMaxHeight),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (game.engine == EngineType.KIRIKIRI) {
-                GameActionRow(
-                    iconRes = R.drawable.ic_sheet_launch_file,
-                    label = "启动文件",
-                    subtitle = game.launchFile ?: "自动",
-                ) { showLaunchFilePicker = true }
+            item {
+                Text(
+                    game.title,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+                )
             }
-            GameActionRow(R.drawable.ic_sheet_launch, "启动游戏") {
-                if (EngineLauncher.needsArtemisPatchConfirm(context, game)) {
-                    showPatchConfirm = true
-                } else {
-                    startLaunch()
+
+            item {
+                GameActionRow(R.drawable.ic_sheet_launch, "启动游戏") {
+                    if (EngineLauncher.needsArtemisPatchConfirm(context, game)) {
+                        showPatchConfirm = true
+                    } else {
+                        startLaunch()
+                    }
                 }
             }
-            GameActionRow(R.drawable.ic_sheet_search_cover, "搜索封面") { showVndbSearch = true }
-            GameActionRow(R.drawable.ic_sheet_edit_cover, "修改封面") { imagePicker.launch("image/*") }
-            GameActionRow(R.drawable.ic_sheet_saves, "存档管理") {
-                startActivityWithPageTransition(context, SaveManagementActivity.createIntent(context, game))
-                onDismiss()
-            }
             if (game.engine == EngineType.KIRIKIRI) {
-                GameActionRow(R.drawable.ic_sheet_patch, "在线补丁") {
-                    startActivityWithPageTransition(context, KrkrOnlinePatchActivity.createIntent(context, game))
+                item {
+                    GameActionRow(
+                        iconRes = R.drawable.ic_sheet_launch_file,
+                        label = "启动文件",
+                        subtitle = game.launchFile ?: "自动",
+                    ) { showLaunchFilePicker = true }
+                }
+            }
+            item {
+                val quickLaunched = EngineScanner.isQuickLaunched(context, game.uri)
+                GameActionRow(
+                    iconRes = R.drawable.ic_home,
+                    label = if (quickLaunched) "移除快捷启动" else "添加快捷启动",
+                ) {
+                    if (quickLaunched) {
+                        EngineScanner.removeQuickLaunch(context, game.uri)
+                        onDismiss()
+                    } else if (EngineScanner.addQuickLaunch(context, game)) {
+                        onDismiss()
+                    } else {
+                        android.widget.Toast.makeText(context, "首页快捷启动已满（最多 3 个）", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            item { GameActionRow(R.drawable.ic_sheet_search_cover, "搜索封面") { showVndbSearch = true } }
+            item { GameActionRow(R.drawable.ic_sheet_edit_cover, "修改封面") { imagePicker.launch("image/*") } }
+            item { GameActionRow(R.drawable.ic_sheet_rename, "名称修改") { showRenameDialog = true } }
+            item {
+                GameActionRow(R.drawable.ic_sheet_saves, "存档管理") {
+                    startActivityWithPageTransition(context, SaveManagementActivity.createIntent(context, game))
                     onDismiss()
                 }
             }
-            GameActionRow(R.drawable.ic_sheet_settings, "引擎设置", onClick = onEngineSettings)
-            GameActionRow(R.drawable.ic_sheet_delete, "删除游戏", danger = true) { showDeleteConfirm = true }
-        }
+            if (game.engine == EngineType.KIRIKIRI) {
+                item {
+                    GameActionRow(R.drawable.ic_sheet_patch, "在线补丁") {
+                        startActivityWithPageTransition(context, KrkrOnlinePatchActivity.createIntent(context, game))
+                        onDismiss()
+                    }
+                }
+            }
+            item { GameActionRow(R.drawable.ic_sheet_settings, "引擎设置", onClick = onEngineSettings) }
+            item { GameActionRow(R.drawable.ic_sheet_delete, "删除游戏", danger = true) { showDeleteConfirm = true } }
 
-        launchError?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            )
-        }
+            launchError?.let {
+                item {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                    )
+                }
+            }
 
-        // 底部安全区留白
-        Box(Modifier.navigationBarsPadding().height(16.dp))
+            // 底部安全区留白
+            item { Box(Modifier.fillMaxWidth().navigationBarsPadding().height(16.dp)) }
+        }
     }
 
     // ===== Artemis 自动补丁确认：总是（记住 auto）/ 本次 / 不再（记住 off）；点遮罩取消 = 不启动 =====
@@ -549,6 +619,17 @@ internal fun GameActionsSheet(
         )
     }
 
+    if (showRenameDialog) {
+        RenameGameDialog(
+            game = game,
+            onDismiss = { showRenameDialog = false },
+            onConfirm = { title ->
+                showRenameDialog = false
+                onGameUpdated(game.copy(title = title))
+            },
+        )
+    }
+
     if (showLaunchFilePicker) {
         LaunchFileDialog(
             game = game,
@@ -581,6 +662,43 @@ internal fun GameActionsSheet(
             },
         )
     }
+}
+
+private val GameActionsSheetMaxHeight: Dp = 560.dp
+
+@Composable
+private fun RenameGameDialog(
+    game: ScanGame,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var title by remember(game.uri, game.title) { mutableStateOf(game.title) }
+    val normalizedTitle = title.trim()
+    val canConfirm = normalizedTitle.isNotEmpty() && normalizedTitle != game.title
+
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("名称修改", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            // 统一 Miuix 风格输入框（AppSearchField）；键盘“搜索/完成”动作直接保存（内容有效时）
+            AppSearchField(
+                query = title,
+                onQueryChange = { title = it },
+                onSearch = { if (canConfirm) onConfirm(normalizedTitle) },
+                leadingIcon = painterResource(R.drawable.ic_sheet_rename),
+                iconContentDescription = "Rename",
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(normalizedTitle) },
+                enabled = canConfirm,
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable
@@ -616,25 +734,11 @@ private fun VndbSearchDialog(
         title = { Text("搜索 VNDB 封面", style = MaterialTheme.typography.titleMedium) },
         text = {
             Column {
-                MiuixSettingsTheme {
-                    SearchBar(
-                        inputField = {
-                            InputField(
-                                query = keyword,
-                                onQueryChange = { keyword = it },
-                                onSearch = { search() },
-                                expanded = false,
-                                onExpandedChange = { },
-                                label = "游戏名称",
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        },
-                        expanded = false,
-                        onExpandedChange = { },
-                        modifier = Modifier.fillMaxWidth(),
-                        content = {},
-                    )
-                }
+                AppSearchField(
+                    query = keyword,
+                    onQueryChange = { keyword = it },
+                    onSearch = { search() },
+                )
                 Button(
                     onClick = { search() },
                     enabled = !searching,
@@ -912,6 +1016,10 @@ internal fun EngineType.coverColor(): Color = when (this) {
     EngineType.KIRIKIRI -> Color(0xFF3B5998)
     EngineType.ONS -> Color(0xFF43A047)
     EngineType.TYRANO -> Color(0xFFC6443C)
+    EngineType.RPG_MV -> Color(0xFF2E7D6E)
+    EngineType.RPG_MZ -> Color(0xFF1976D2)
+    EngineType.VN -> Color(0xFF8E5A9E)
+    EngineType.WEB_OTHER -> Color(0xFF546E7A)
     EngineType.ARTEMIS -> Color(0xFF7E57C2)
     EngineType.UNKNOWN -> Color(0xFF607D8B)
 }

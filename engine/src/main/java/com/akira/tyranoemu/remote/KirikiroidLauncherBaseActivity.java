@@ -484,6 +484,7 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
         String gameLibrary = gameLibraryForBridge();
         boolean initialized = NativeBridge.initialize(gameLibrary);
         nativeBridgeInitialized = initialized;
+        recordBridgeDiagnostic("initialize=" + initialized + " library=" + gameLibrary);
         Log.i(TAG, "native initialize result=" + initialized + " so=" + gameLibrary);
         if (!initialized) {
             Log.e(TAG, "native bridge initialization failed; skip KRKR hook setup");
@@ -501,32 +502,34 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
             return;
         }
 
-        // The scoped launcher keeps game assets at their original path and
-        // provides a real app-private savedata directory through the Java
-        // write bridge. Keep native filesystem calls intact: krkr_bridge
-        // only hooks open/open64(path, flags), while games also use other write APIs.
-        if (scopedSaveDir) {
-            Log.i(TAG, "KRKR scoped save uses direct savedata directory; native open interceptor disabled");
-            return;
-        }
-
-        if (!safFileFallback) {
-            Log.i(TAG, "native interceptor skipped: SAF fallback disabled");
+        if (!scopedSaveDir && !safFileFallback) {
+            Log.i(TAG, "native interceptor skipped: save redirect and SAF fallback disabled");
             return;
         }
         String prefix = null;
         try {
-            String rawPath = intent.getStringExtra("path");
+            String rawPath = intent.getStringExtra("projectRoot");
+            if (rawPath == null || rawPath.trim().isEmpty()) rawPath = intent.getStringExtra("gamedir");
+            if (rawPath == null || rawPath.trim().isEmpty()) rawPath = intent.getStringExtra("path");
             if (rawPath != null && !rawPath.trim().isEmpty()) {
                 String resolved = normalizeKrPath(rawPath);
                 File root = new File(resolved);
                 if (root.isFile()) root = root.getParentFile();
                 if (root != null) {
-                    File saveRoot = new File(new File(getExternalFilesDir(null), "save"), safeSaveName(root.getAbsolutePath()));
-                    if (saveRoot.exists() || saveRoot.mkdirs()) {
-                        Log.i(TAG, "KRKR SAF file fallback hook enabled");
-                        prefix = storagePrefix(root.getAbsolutePath());
+                    if (scopedSaveDir) {
+                        String explicitSaveRoot = normalizeKrPath(intent.getStringExtra("scopedSaveRoot"));
+                        File saveRoot = explicitSaveRoot.isEmpty() ? null : new File(explicitSaveRoot);
+                        if (saveRoot == null || (!saveRoot.isDirectory() && !saveRoot.mkdirs())) {
+                            Log.e(TAG, "KRKR scoped save directory unavailable: " + explicitSaveRoot);
+                            nativeBridgeInitialized = false;
+                            return;
+                        }
                     }
+                    // KRKR normalizes storage names to lowercase before some native open()
+                    // calls. A mixed-case game directory therefore cannot be matched by an
+                    // exact savedata prefix. Hook the stable volume root and let KrPathUtils
+                    // redirect only savedata paths to the app-scoped directory.
+                    prefix = storagePrefix(root.getAbsolutePath());
                 }
             }
         } catch (Throwable t) {
@@ -535,14 +538,32 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
         if (prefix != null) {
             try {
                 NativeBridge.interceptor(prefix);
-                NativeBridge.relocate();
-                Log.i(TAG, "native interceptor enabled prefix=" + prefix);
+                int relocateStatus = NativeBridge.relocate();
+                boolean relocated = relocateStatus != 0;
+                recordBridgeDiagnostic("relocate=" + relocateStatus + " prefix=" + prefix
+                        + " scoped=" + scopedSaveDir + " saf=" + safFileFallback);
+                Log.i(TAG, "native interceptor enabled prefix=" + prefix
+                        + " scoped=" + scopedSaveDir + " saf=" + safFileFallback
+                        + " relocated=" + relocated);
+                if (!relocated) {
+                    Log.e(TAG, "native interceptor could not patch libgame file imports");
+                    if (scopedSaveDir) nativeBridgeInitialized = false;
+                }
             } catch (Throwable t) {
                 Log.e(TAG, "enable native interceptor failed", t);
+                if (scopedSaveDir) nativeBridgeInitialized = false;
             }
         } else {
             Log.w(TAG, "native interceptor skipped: empty prefix");
+            if (scopedSaveDir) nativeBridgeInitialized = false;
         }
+    }
+
+    private void recordBridgeDiagnostic(String value) {
+        try {
+            getSharedPreferences("krkr_bridge_diagnostics", MODE_PRIVATE)
+                    .edit().putString("last", value).commit();
+        } catch (Throwable ignored) { }
     }
 
     private synchronized void requestGameLaunch(String path, boolean maps) {
@@ -756,22 +777,6 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
         return p;
     }
 
-    private static String safeSaveName(String rootPath) {
-        try {
-            String path = normalizeKrPath(rootPath);
-            File f = new File(path);
-            String name = f.getName();
-            if (name == null || name.trim().isEmpty()) {
-                File parent = f.getParentFile();
-                name = parent == null ? "default" : parent.getName();
-            }
-            name = name == null ? "default" : name.trim().replaceAll("[\\\\/:*?\"<>|]", "_");
-            return name.isEmpty() ? "default" : name;
-        } catch (Throwable ignored) {
-            return "default";
-        }
-    }
-
     @Override
     public void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -841,8 +846,9 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
                 : getIntent().getIntExtra("orientation", ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         if (!launchOrientationGuardEnabled) return requested;
         // Kirikiroid2/Cocos is fragile while startupFrom/doStartup is still loading XP3/TJS.
-        // During the launch mask, freeze 180-degree sensor flips to avoid rapid surface
-        // resize/pause/resume cycles; restore the caller's orientation once the game is ready.
+        // During the launch mask, always use a concrete landscape orientation.  Do not use
+        // SCREEN_ORIENTATION_LOCKED here: some tablets lock the transient portrait state and
+        // leave the loading overlay mismatched with the touch/surface coordinates.
         if (requested == ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE) {
             return ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;
         }

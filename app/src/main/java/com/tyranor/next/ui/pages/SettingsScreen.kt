@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -24,9 +25,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.tyranor.next.R
 import com.tyranor.next.settings.EngineSettingsStore
 import com.tyranor.next.theme.MiuixSettingsTheme
+import com.tyranor.next.theme.NavWhite
 import com.tyranor.next.ui.common.TopBarIcon
 import com.tyranor.next.ui.common.glassNavBottomInset
 import com.tyranor.next.updater.GitHubUpdateChecker
@@ -70,6 +76,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateAvailable by remember { mutableStateOf<UpdateCheckResult.UpdateAvailable?>(null) }
+    var showGroupDialog by remember { mutableStateOf(false) }
 
     fun checkUpdate() {
         if (checkingUpdate) return
@@ -125,12 +132,24 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 item {
                     MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
                         Column(Modifier.padding(vertical = 4.dp)) {
-                            ArrowPreference(title = "应用设置", onClick = { startActivityWithPageTransition(ctx, AppSettingsActivity.createIntent(ctx)) })
-                            ArrowPreference(title = if (checkingUpdate) "正在检查更新" else "更新检查", onClick = { checkUpdate() })
+                            ArrowPreference(
+                                title = "应用设置",
+                                summary = "有关应用内的各项配置",
+                                startAction = { SettingsItemIcon(R.drawable.ic_settings_app) },
+                                onClick = { startActivityWithPageTransition(ctx, AppSettingsActivity.createIntent(ctx)) },
+                            )
+                            ArrowPreference(
+                                title = if (checkingUpdate) "正在检查更新" else "更新检查",
+                                summary = "对项目Github获取更新信息",
+                                startAction = { SettingsItemIcon(R.drawable.ic_settings_update) },
+                                onClick = { checkUpdate() },
+                            )
                             ArrowPreference(
                                 title = "加入群聊",
+                                summary = "跳转到官方聊天群组",
+                                startAction = { SettingsItemIcon(R.drawable.ic_settings_group) },
                                 onClick = {
-                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://qm.qq.com/q/M9JH8A9Yys")))
+                                    showGroupDialog = true
                                 },
                             )
                         }
@@ -139,6 +158,31 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 item { BottomInsetSpacer() }
             }
         }
+    }
+
+    if (showGroupDialog) {
+        AppAlertDialog(
+            onDismissRequest = { showGroupDialog = false },
+            title = { Text("加入群聊", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    GroupChannelItem("企鹅群聊", R.drawable.ic_group_qq) {
+                        showGroupDialog = false
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://qm.qq.com/q/M9JH8A9Yys")))
+                    }
+                    GroupChannelItem("飞机频道", R.drawable.ic_group_telegram) {
+                        showGroupDialog = false
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/tyranornext")))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showGroupDialog = false }) { Text("取消") }
+            },
+        )
     }
 
     updateAvailable?.let { update ->
@@ -302,10 +346,49 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
 }
 
 enum class EngineSettingsKind(val title: String, @param:DrawableRes val iconRes: Int) {
-    KRKR("KRKR引擎设置", R.drawable.ic_engine_item),
-    ONS("ONS引擎设置", R.drawable.ic_engine_item),
-    ARTEMIS("Artemis引擎设置", R.drawable.ic_engine_item),
-    TYRANO("Tyrano引擎设置", R.drawable.ic_engine_item),
+    KRKR("KRKR引擎设置", R.drawable.ic_settings_engine),
+    ONS("ONS引擎设置", R.drawable.ic_settings_engine),
+    ARTEMIS("Artemis引擎设置", R.drawable.ic_settings_engine),
+    TYRANO("Tyrano引擎设置", R.drawable.ic_settings_engine),
+}
+
+@Composable
+private fun SettingsItemIcon(@DrawableRes iconRes: Int) {
+    Image(
+        painter = painterResource(iconRes),
+        contentDescription = null,
+        modifier = Modifier.padding(end = 6.dp).size(24.dp),
+    )
+}
+
+/** 统一弹窗内的群聊/频道选项项：左侧 logo + 名称 + 右侧指示箭头。 */
+@Composable
+private fun GroupChannelItem(label: String, iconRes: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .background(NavWhite)
+            .padding(vertical = 12.dp, horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.padding(start = 12.dp).weight(1f),
+        )
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MiuixTheme.colorScheme.onBackground,
+        )
+    }
 }
 
 /** 顶部栏：遵守全局规范（Column + 页面背景色 + statusBarsPadding + 64dp 标题区，沉浸式）。 */

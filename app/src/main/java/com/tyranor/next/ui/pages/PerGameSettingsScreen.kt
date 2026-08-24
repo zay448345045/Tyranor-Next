@@ -236,10 +236,17 @@ fun PerGameSettingsScreen(game: ScanGame) {
                             OverrideChoice("自动补丁", ART_PATCH_MAP2, globalArtPatch, artPatch) { artPatch = it }
                         }
                     }
-                    EngineType.TYRANO, EngineType.UNKNOWN -> item {
-                        SectionCard("Tyrano") {
+                    EngineType.TYRANO,
+                    EngineType.RPG_MV,
+                    EngineType.RPG_MZ,
+                    EngineType.VN,
+                    EngineType.WEB_OTHER,
+                    EngineType.UNKNOWN -> item {
+                        SectionCard(if (game.engine == EngineType.UNKNOWN) "Web" else game.engine.displayName) {
                             OverrideSwitch("允许外部网络", globalTyExternal, tyExternal) { tyExternal = it }
-                            OverrideSwitch("独立存档目录", globalTyScoped, tyScoped) { tyScoped = it }
+                            if (game.engine !in setOf(EngineType.VN, EngineType.WEB_OTHER)) {
+                                OverrideSwitch("独立存档目录", globalTyScoped, tyScoped) { tyScoped = it }
+                            }
                         }
                     }
                 }

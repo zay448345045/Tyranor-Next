@@ -222,6 +222,24 @@ internal fun AppSettingsScreen() {
                 item {
                     MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
                         Column(Modifier.padding(vertical = 4.dp)) {
+                            var gameSort by remember { mutableStateOf(AppSettingsStore.getGameSort(ctx)) }
+                            val gameSortModes = listOf(
+                                AppSettingsStore.GAME_SORT_ALPHA to "字母大小",
+                                AppSettingsStore.GAME_SORT_BRACKET_TAG to "括号标签",
+                            )
+                            val sortIndex = gameSortModes.indexOfFirst { it.first == gameSort }
+                                .let { if (it < 0) 0 else it }
+                            OverlayDropdownPreference(
+                                title = "游戏排序",
+                                items = gameSortModes.map { it.second },
+                                selectedIndex = sortIndex,
+                                onSelectedIndexChange = { index ->
+                                    gameSortModes.getOrNull(index)?.first?.let { sort ->
+                                        gameSort = sort
+                                        AppSettingsStore.setGameSort(ctx, sort)
+                                    }
+                                },
+                            )
                             var depth by remember { mutableIntStateOf(AppSettingsStore.getScanDepth(ctx)) }
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp),
@@ -317,7 +335,7 @@ internal fun AppSettingsScreen() {
                             )
                             TextButton(
                                 onClick = {
-                                    EngineScanner.removeRoot(ctx, android.net.Uri.parse(dir))
+                                    EngineScanner.removeRootAndGames(ctx, android.net.Uri.parse(dir))
                                     scanDirs = EngineScanner.loadRoots(ctx)
                                 },
                             ) {

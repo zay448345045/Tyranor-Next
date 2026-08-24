@@ -25,7 +25,7 @@ public final class Kirikiroid126 extends KirikiroidLauncherBaseActivity {
             return;
         }
         setResolvedGameLibrary(gameLibrary);
-        System.loadLibrary("krkr_bridge");
+        System.loadLibrary("krkr_bridge_v2");
         super.onLoadNativeLibraries();
     }
 

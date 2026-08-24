@@ -14,6 +14,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.preference.PreferenceManager;
 import android.media.AudioTrack;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import java.lang.reflect.Field;
@@ -22,6 +23,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import bridge.NativeBridge;
 import bridge.KrPathUtils;
+import com.core.engine.DoubleBackExit;
 import com.core.nativeplugin.NativeLibraryLoader;
 import java.util.Locale;
 import org.cocos2dx.lib.Cocos2dxActivity;
@@ -42,6 +44,7 @@ public class KR2Activity extends Cocos2dxActivity {
     private boolean sdlAudioPausedForBackground;
     /** Fallback for devices on which AudioTrack.pause() rejects the current stream state. */
     private boolean sdlAudioMutedForBackground;
+    private Object backInvokedCallback;
 
     public static KR2Activity GetInstance() { return sInstance; }
     public static KR2Activity getInstance() { return sInstance; }
@@ -293,13 +296,14 @@ public class KR2Activity extends Cocos2dxActivity {
         if (NativeLibraryLoader.loadKirikiroid139(this) == null) {
             throw new UnsatisfiedLinkError("Kirikiroid2 native plugin is missing or invalid");
         }
-        System.loadLibrary("krkr_bridge");
+        System.loadLibrary("krkr_bridge_v2");
     }
     @Override public void onCreate(Bundle savedInstanceState) {
         sInstance = this;
         msgHandler = new Handler(Looper.getMainLooper()) { @Override public void handleMessage(Message msg) { KR2Activity.this.handleMessage(msg); } };
         Sp = PreferenceManager.getDefaultSharedPreferences(this);
         super.onCreate(savedInstanceState);
+        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, KR2Activity::exit);
         // 1.2.6 libgame126.so 缺失 initDump/nativeOnLowMemory 的 JNI 实现，
         // 此处用 try-catch 兜底以兼容该版本；1.3.4/1.3.9 的 .so 都有这两个方法，不会进入 catch。
         try {
@@ -388,6 +392,8 @@ public class KR2Activity extends Cocos2dxActivity {
     @Override public void onDestroy() {
         try {
             android.util.Log.i("KR2Activity", "destroy KR2Activity");
+            DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
+            DoubleBackExit.clear(this);
             mTextEdit = null;
             if (msgHandler != null) msgHandler.removeCallbacksAndMessages(null);
             msgHandler = null;
@@ -400,6 +406,16 @@ public class KR2Activity extends Cocos2dxActivity {
         // 1.2.6 libgame126.so 缺失 nativeOnLowMemory JNI 实现，try-catch 兜底。
         try { nativeOnLowMemory(); } catch (UnsatisfiedLinkError ignored) { }
     }
+
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (DoubleBackExit.dispatchBackKey(this, event, KR2Activity::exit)) return true;
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override public void onBackPressed() {
+        DoubleBackExit.handleBack(this, KR2Activity::exit);
+    }
+
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         // 弹窗显示期间，阻止 Cocos2dx 恢复 GL 线程（super 会调用 resumeIfHasFocus），
         // 防止引擎在弹窗未确认时自动继续执行。
@@ -412,14 +428,15 @@ public class KR2Activity extends Cocos2dxActivity {
     }
     public String[] getStoragePath() {
         // The native engine uses this array for both its writable data root and
-        // archive/plugin discovery. The game root stays on external storage;
-        // only the first entry is the redirected app-private savedata path.
-        // Keep savedata first to preserve the app-scoped write target, then add
-        // the normal game roots below for read-only discovery.
+        // archive/plugin discovery. Keep the selected savedata directory first
+        // as the writable root, then add the game root for read-only discovery.
         java.util.LinkedHashSet<String> paths = new java.util.LinkedHashSet<>();
         try {
-            if (getIntent() != null && getIntent().getBooleanExtra("scopedSaveDir", false)) {
-                File dir = scopedSaveDirectory(getIntent());
+            Intent intent = getIntent();
+            if (intent != null) {
+                File dir = intent.getBooleanExtra("scopedSaveDir", false)
+                        ? scopedSaveDirectory(intent)
+                        : gameSaveDirectory(intent);
                 if (dir != null) {
                     if (!dir.exists()) dir.mkdirs();
                     paths.add(dir.getAbsolutePath());
@@ -450,6 +467,18 @@ public class KR2Activity extends Cocos2dxActivity {
         return out;
     }
 
+    private static File gameSaveDirectory(Intent intent) {
+        if (intent == null) return null;
+        String explicit = KrPathUtils.normalizeFilePath(intent.getStringExtra("gameSaveRoot"));
+        if (explicit != null && !explicit.trim().isEmpty() && explicit.startsWith("/")) {
+            return new File(explicit);
+        }
+        String root = KrPathUtils.normalizeFilePath(intent.getStringExtra("projectRoot"));
+        if (root == null || root.trim().isEmpty()) root = KrPathUtils.normalizeFilePath(intent.getStringExtra("gamedir"));
+        if (root == null || root.trim().isEmpty() || !root.startsWith("/")) return null;
+        return new File(root, "savedata");
+    }
+
     private static void addKrStoragePathFromIntent(java.util.LinkedHashSet<String> out, Intent intent, String key) {
         if (intent == null || key == null) return;
         addKrStoragePath(out, intent.getStringExtra(key));
@@ -464,34 +493,35 @@ public class KR2Activity extends Cocos2dxActivity {
         p = KrPathUtils.normalizeFilePath(p);
         if (p == null || !p.startsWith("/")) return;
         while (p.endsWith("/") && p.length() > 1) p = p.substring(0, p.length() - 1);
+        try {
+            File f = new File(p);
+            String exact;
+            if (f.isFile()) {
+                File parent = f.getParentFile();
+                exact = parent != null ? parent.getAbsolutePath() : p;
+            } else {
+                exact = f.getAbsolutePath();
+            }
+            out.add(exact);
+            addKrStorageAlias(out, exact);
+        } catch (Throwable ignored) { }
+    }
+
+    private static void addKrStorageAlias(java.util.LinkedHashSet<String> out, String path) {
+        if (out == null || path == null) return;
+        String p = KrPathUtils.normalizeFilePath(path);
+        if (p == null || !p.startsWith("/")) return;
+        while (p.endsWith("/") && p.length() > 1) p = p.substring(0, p.length() - 1);
         String lower = p.toLowerCase(Locale.ROOT);
         if (lower.equals("/sdcard") || lower.startsWith("/sdcard/")) {
             out.add("/sdcard");
-            return;
-        }
-        if (lower.equals("/storage/emulated/0") || lower.startsWith("/storage/emulated/0/")) {
+        } else if (lower.equals("/storage/emulated/0") || lower.startsWith("/storage/emulated/0/")) {
             out.add("/storage/emulated/0");
-            return;
-        }
-        if (lower.startsWith("/storage/")) {
+        } else if (lower.startsWith("/storage/")) {
             String rest = p.substring("/storage/".length());
             int slash = rest.indexOf('/');
-            if (slash > 0) {
-                out.add("/storage/" + rest.substring(0, slash));
-                return;
-            }
-            out.add(p);
-            return;
+            out.add(slash > 0 ? "/storage/" + rest.substring(0, slash) : p);
         }
-        try {
-            File f = new File(p);
-            if (f.isFile()) {
-                File parent = f.getParentFile();
-                if (parent != null) out.add(parent.getAbsolutePath());
-            } else {
-                out.add(f.getAbsolutePath());
-            }
-        } catch (Throwable ignored) { }
     }
 
     private static String contentUriToRawPath(String value) {
