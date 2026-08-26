@@ -44,7 +44,6 @@ public class KR2Activity extends Cocos2dxActivity {
     private boolean sdlAudioPausedForBackground;
     /** Fallback for devices on which AudioTrack.pause() rejects the current stream state. */
     private boolean sdlAudioMutedForBackground;
-    private Object backInvokedCallback;
 
     public static KR2Activity GetInstance() { return sInstance; }
     public static KR2Activity getInstance() { return sInstance; }
@@ -303,7 +302,6 @@ public class KR2Activity extends Cocos2dxActivity {
         msgHandler = new Handler(Looper.getMainLooper()) { @Override public void handleMessage(Message msg) { KR2Activity.this.handleMessage(msg); } };
         Sp = PreferenceManager.getDefaultSharedPreferences(this);
         super.onCreate(savedInstanceState);
-        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, KR2Activity::exit);
         // 1.2.6 libgame126.so 缺失 initDump/nativeOnLowMemory 的 JNI 实现，
         // 此处用 try-catch 兜底以兼容该版本；1.3.4/1.3.9 的 .so 都有这两个方法，不会进入 catch。
         try {
@@ -392,7 +390,6 @@ public class KR2Activity extends Cocos2dxActivity {
     @Override public void onDestroy() {
         try {
             android.util.Log.i("KR2Activity", "destroy KR2Activity");
-            DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
             DoubleBackExit.clear(this);
             mTextEdit = null;
             if (msgHandler != null) msgHandler.removeCallbacksAndMessages(null);
@@ -408,12 +405,34 @@ public class KR2Activity extends Cocos2dxActivity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
-        if (DoubleBackExit.dispatchBackKey(this, event, KR2Activity::exit)) return true;
+        // BACK 不经视图层：首按直接透传给游戏（同原版模拟器，native 侧映射为 ESC），
+        // 双击退出仅作兜底；文本输入激活时放行，让 KrTextInputView.onKeyPreIme 优先收起键盘。
+        if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK && !isTextInputActive()) {
+            switch (event.getAction()) {
+                case KeyEvent.ACTION_DOWN:
+                    if (event.getRepeatCount() == 0) {
+                        if (DoubleBackExit.shouldExit(this)) exit();
+                        else nativeKeyAction(KeyEvent.KEYCODE_BACK, true);
+                    }
+                    return true;
+                case KeyEvent.ACTION_UP:
+                    nativeKeyAction(KeyEvent.KEYCODE_BACK, false);
+                    return true;
+                default:
+                    return true;
+            }
+        }
         return super.dispatchKeyEvent(event);
     }
 
+    private static boolean isTextInputActive() {
+        View view = mTextEdit;
+        return view != null && view.getVisibility() == View.VISIBLE;
+    }
+
     @Override public void onBackPressed() {
-        DoubleBackExit.handleBack(this, KR2Activity::exit);
+        // 无视图消费 BACK 时的兜底路径（如键盘收起后的残余事件）：只布防退出窗口，不向引擎透传
+        if (DoubleBackExit.shouldExit(this)) exit();
     }
 
     @Override public void onWindowFocusChanged(boolean hasFocus) {

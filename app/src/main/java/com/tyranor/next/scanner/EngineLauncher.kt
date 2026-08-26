@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.graphics.toArgb
+import bridge.KrSafMirror
 import com.akira.tyranoemu.remote.ArtemisActivityV1
 import com.akira.tyranoemu.remote.ArtemisActivityV2
 import com.akira.tyranoemu.remote.ArtemisActivityV3
@@ -22,7 +23,10 @@ import com.tyranor.next.settings.EngineSettingsStore
 import com.tyranor.next.settings.PerGameSettingsStore
 import com.tyranor.next.theme.AppThemeColors
 import com.yuri.onscripter.ONScripter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 /**
  * 游戏引擎启动器：根据 [EngineType] 把扫描到的游戏目录交给对应引擎宿主 Activity。
@@ -50,15 +54,34 @@ object EngineLauncher {
 
     /** 尝试启动游戏。返回错误信息；null 表示成功发起。
      *  [patchChoice] 为 Artemis 补丁确认弹窗（见 [needsArtemisPatchConfirm]）的选择结果。 */
-    fun launch(context: Context, game: ScanGame, patchChoice: ArtemisPatchChoice? = null): String? {
+    suspend fun launch(context: Context, game: ScanGame, patchChoice: ArtemisPatchChoice? = null): String? {
         val path = resolveGameDirectory(context, game)
         if (path == null) {
             return "无法解析游戏目录（仅支持本地文件路径）"
         }
         requestAllFilesAccessIfNeeded(context, game, path)?.let { return it }
         EnginePluginBootstrap.ensureForLaunch(context, game.engine)?.let { return it }
+        val krSafMirror = if (
+            game.engine == EngineType.KIRIKIRI && EngineScanner.isRemovableStoragePath(path)
+        ) {
+            try {
+                withContext(Dispatchers.IO) {
+                    KrSafMirror.prepare(context.applicationContext, game.uri, path, game.title)
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "prepare KRKR SAF mirror failed uri=${game.uri}", t)
+                return t.message ?: "无法准备 KRKR SD 卡镜像"
+            }
+        } else {
+            null
+        }
         if (game.engine == EngineType.KIRIKIRI) {
-            ensureKrSaveDir(context, game, path)?.let { return it }
+            if (krSafMirror != null) {
+                val saveDir = File(krSafMirror.mirrorRoot, "savedata")
+                if (!saveDir.isDirectory && !saveDir.mkdirs()) return "无法创建 KRKR 镜像存档目录"
+            } else {
+                ensureKrSaveDir(context, game, path)?.let { return it }
+            }
         }
         // “总是/不再”持久化为全局补丁策略；“本次”不落盘，仅本次按 auto 生效
         if (game.engine == EngineType.ARTEMIS) {
@@ -71,7 +94,7 @@ object EngineLauncher {
             }
         }
         return try {
-            val intent = buildIntent(context, game.engine, path, game, patchChoice)
+            val intent = buildIntent(context, game.engine, path, game, patchChoice, krSafMirror)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
             EngineScanner.recordRecentGame(context, game)
@@ -142,10 +165,11 @@ object EngineLauncher {
         path: String,
         game: ScanGame,
         patchChoice: ArtemisPatchChoice? = null,
+        krSafMirror: KrSafMirror.Prepared? = null,
     ): Intent {
         val intent = when (engine) {
             EngineType.KIRIKIRI ->
-                buildKirikiriIntent(context, path, game)
+                buildKirikiriIntent(context, path, game, krSafMirror)
 
             EngineType.ONS -> {
                 var ons = EngineSettingsStore.loadOns(context)
@@ -226,12 +250,18 @@ object EngineLauncher {
      * KRKR 启动：按设置页选择的内核（krkrsdl3 / 吉里吉里2）与引擎版本（auto/1.3.9/1.3.4/1.2.6）
      * 路由到对应引擎宿主，并注入字体、独立存档与渲染/内存偏好。
      */
-    private fun buildKirikiriIntent(context: Context, path: String, game: ScanGame): Intent {
+    private fun buildKirikiriIntent(
+        context: Context,
+        path: String,
+        game: ScanGame,
+        safMirror: KrSafMirror.Prepared?,
+    ): Intent {
         val gid = game.uri
         fun <T> or(override: T?, global: T): T = override ?: global
         val needsSafFallback = EngineScanner.isRemovableStoragePath(path)
         val kernel = effectiveKrKernel(context, gid, path)
-        val launchEntry = pickKrActivateEntry(path, game)
+        val engineRoot = safMirror?.mirrorRoot?.absolutePath ?: path
+        val launchEntry = pickKrActivateEntry(engineRoot, game)
         if (kernel == EngineSettingsStore.KERNEL_KRKRSDL3) {
             val args = buildKrkrsdl3Args(context, gid, path, launchEntry)
             Log.i(TAG, "krkrsdl3 launch root=$path entry=$launchEntry args=$args")
@@ -256,7 +286,9 @@ object EngineLauncher {
             else -> Kirikiroid139::class.java
         }
         val scoped = effectiveKrScopedSaveDir(context, gid)
-        val actualSaveRoot = resolveKrSaveDir(context, path, kernel, scoped)
+        val actualSaveRoot = safMirror?.let { File(it.mirrorRoot, "savedata") }
+            ?: resolveKrSaveDir(context, path, kernel, scoped)
+        val effectiveScoped = scoped || safMirror != null
         val defaultFont = PerGameSettingsStore.getStr(context, gid, PerGameSettingsStore.F_DEFAULT_FONT)
             ?: EngineSettingsStore.getKrDefaultFont(context)
         val forceFont = or(PerGameSettingsStore.getBool(context, gid, PerGameSettingsStore.F_FORCE_DEFAULT_FONT), EngineSettingsStore.isKrForceDefaultFont(context))
@@ -264,16 +296,23 @@ object EngineLauncher {
             // KR2 引擎把 path 视为“启动条目”，gamedir = path 的父目录。
             putExtra("path", launchEntry)
             putExtra("gamePath", launchEntry)
-            putExtra("projectRoot", path)
-            putExtra("gamedir", path)
+            putExtra("projectRoot", engineRoot)
+            putExtra("gamedir", engineRoot)
+            putExtra("originalProjectRoot", path)
             putExtra("gameSaveRoot", actualSaveRoot.absolutePath)
             putExtra("rootUri", game.uri)
             putExtra("launchTarget", game.launchTarget)
             putExtra("launchMode", "internal.kirikiroid2")
             putExtra("safFileFallback", needsSafFallback)
+            safMirror?.let {
+                putExtra("baseDoc", game.uri)
+                putExtra("safMirrorRoot", it.mirrorRoot.absolutePath)
+                putExtra("safMirrorIndex", it.indexFile.absolutePath)
+                putExtra("safMirrorFiles", it.fileCount)
+            }
             putExtra("orientation", 6)
-            putExtra("scopedSaveDir", scoped)
-            if (scoped) {
+            putExtra("scopedSaveDir", effectiveScoped)
+            if (effectiveScoped) {
                 putExtra("scopedSaveRoot", actualSaveRoot.absolutePath)
             }
             putExtra("focus", "true")
@@ -429,7 +468,7 @@ object EngineLauncher {
         when (value.trim().lowercase()) {
             EngineSettingsStore.RENDERER_OPENGL, "gl", "gpu" -> EngineSettingsStore.RENDERER_OPENGL
             EngineSettingsStore.RENDERER_SOFTWARE, "sw" -> EngineSettingsStore.RENDERER_SOFTWARE
-            else -> EngineSettingsStore.RENDERER_SOFTWARE
+            else -> EngineSettingsStore.RENDERER_OPENGL
         }
 
     /**
@@ -502,8 +541,14 @@ object EngineLauncher {
     }
 
     private fun buildWebIntent(context: Context, path: String, game: ScanGame): Intent {
+        // Tyrano 与 RPG Maker Web 共用 TyranoActivity，因此沿用同一组 WebView 宿主设置。
         val scoped = PerGameSettingsStore.getBool(context, game.uri, "ty_scoped")
             ?: EngineSettingsStore.isTyranoScopedSaveDir(context)
+        val rpgMakerModEnabled = effectiveRpgMakerModEnabled(
+            game.engine,
+            PerGameSettingsStore.getBool(context, game.uri, PerGameSettingsStore.F_RPG_MAKER_MOD_ENABLED),
+            EngineSettingsStore.isRpgMakerModEnabled(context),
+        )
         val scopedSaveRoot = if (scoped) {
             context.getExternalFilesDir(null)?.let { external ->
                 File(File(File(external, "save"), "tyrano"), EngineScanner.safeSaveName(path)).absolutePath
@@ -530,6 +575,8 @@ object EngineLauncher {
             putExtra("orientation", 6)
             putExtra("scopedSaveDir", scoped)
             scopedSaveRoot?.let { putExtra("scopedSaveRoot", it) }
+            putExtra("rpgMakerModEnabled", rpgMakerModEnabled)
+            putExtra("rpgMakerModGameId", game.uri)
         }
     }
 
@@ -555,7 +602,8 @@ object EngineLauncher {
 
         // 用户通过“启动文件”手动指定的入口优先（文件不存在时回退自动逻辑）
         game.launchFile?.takeIf { it.isNotBlank() }?.let { manual ->
-            val f = java.io.File(path, manual)
+            val exact = java.io.File(path, manual)
+            val f = if (exact.isFile) exact else java.io.File(path, manual.lowercase(Locale.ROOT))
             if (f.isFile) return f.absolutePath
         }
 
@@ -573,7 +621,8 @@ object EngineLauncher {
         val target = game.launchTarget
             .takeIf { !it.isNullOrBlank() && it != "[游戏目录]" && it != "DIR" }
         if (target != null && !target.lowercase().startsWith("bg")) {
-            val f = java.io.File(path, target)
+            val exact = java.io.File(path, target)
+            val f = if (exact.isFile) exact else java.io.File(path, target.lowercase(Locale.ROOT))
             if (f.isFile) return f.absolutePath
         }
 
@@ -626,6 +675,12 @@ object EngineLauncher {
         EngineScanner.safUriToPath(uriText)?.let { mapped ->
             val f = java.io.File(mapped)
             if (f.isDirectory) return f.absolutePath
+            if (game.engine == EngineType.KIRIKIRI && EngineScanner.isRemovableStoragePath(mapped)) {
+                val readableBySaf = runCatching {
+                    DocumentFile.fromTreeUri(context.applicationContext, Uri.parse(uriText))?.isDirectory == true
+                }.getOrDefault(false)
+                if (readableBySaf) return f.absolutePath
+            }
         }
 
         val uri = Uri.parse(uriText) ?: return null
@@ -653,3 +708,10 @@ object EngineLauncher {
         }
     }
 }
+
+internal fun effectiveRpgMakerModEnabled(
+    engine: EngineType,
+    perGameOverride: Boolean?,
+    globalDefault: Boolean,
+): Boolean = engine in setOf(EngineType.RPG_MV, EngineType.RPG_MZ) &&
+    (perGameOverride ?: globalDefault)

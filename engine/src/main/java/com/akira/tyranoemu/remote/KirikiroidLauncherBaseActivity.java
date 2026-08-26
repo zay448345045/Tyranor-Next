@@ -98,6 +98,7 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
         launchOrientationGuardEnabled = !getIntent().getBooleanExtra("originMode", false);
         applyKrkrRequestedOrientation();
         doSetSystemUiVisibility();
+        NativeBridge.configureSafMirror(getIntent().getStringExtra("safMirrorIndex"));
         // Must run before super.onCreate (native library loading and preference singleton construction).
         applyFontPreferences();
         applyEnginePreferences();
@@ -532,7 +533,10 @@ public abstract class KirikiroidLauncherBaseActivity extends KR2Activity {
                     // calls. A mixed-case game directory therefore cannot be matched by an
                     // exact savedata prefix. Hook the stable volume root and let KrPathUtils
                     // redirect only savedata paths to the app-scoped directory.
-                    prefix = storagePrefix(root.getAbsolutePath());
+                    String mirrorRoot = normalizeKrPath(intent.getStringExtra("safMirrorRoot"));
+                    prefix = mirrorRoot.isEmpty()
+                            ? storagePrefix(root.getAbsolutePath())
+                            : mirrorRoot.toLowerCase(Locale.ROOT);
                 }
             }
         } catch (Throwable t) {

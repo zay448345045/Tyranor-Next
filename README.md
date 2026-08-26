@@ -1,45 +1,46 @@
 # Tyranor Next
 
-基于 **Tyranor 模拟器逆向重写**的多引擎视觉小说（Galgame）聚合启动器，面向 Android 平台。内置 Kirikiri / ONScripter / Tyrano / Artemis 四套引擎运行时，提供游戏库管理、封面获取、存档镜像、引擎参数调节等一体化体验。
+<p align="center">
+  <img src="screenshots/index.png" alt="Tyranor Next" width="850" />
+</p>
+
+基于 **Tyranor 模拟器逆向重写**的多引擎视觉小说（Galgame）聚合启动器，面向 Android 平台。内置 Kirikiri / ONScripter / Tyrano / Artemis 四套引擎运行环境，可识别和启动八类游戏，提供游戏库管理、封面获取、存档镜像、引擎参数调节等一体化体验。
 
 主打轻便、简单、快捷，不引入其他冗余功能的简约设计思路
+
+## 支持范围
+
+### 引擎与游戏类型
+
+| 游戏类型 | 典型识别特征 | 运行环境 |
+| --- | --- | --- |
+| Kirikiri / Kirikiri2 | `.xp3`、`startup.tjs` | Kirikiroid2 / krkrsdl3 原生运行时 |
+| ONScripter | `nscript.dat`、`.nsa` | ONScripter 原生运行时 |
+| Artemis | `system.ini`、`.pfs` | Artemis 原生运行时 |
+| TyranoBuilder | `index.html`、`tyrano/` | 内置 Tyrano Web 运行环境 |
+| RPG Maker MV | `www/`、`js/rpg_core.js` | 内置 Web 运行环境 |
+| RPG Maker MZ | `www/`、`js/rmmz_core.js` | 内置 Web 运行环境 |
+| VN | `globalData.vndata` | 内置 Web 运行环境 |
+| WebOther | 通用 `index.html` 网页游戏 | 内置 Web 运行环境 |
+
+内置 Web 运行环境同时支持部分以 `app.asar` 打包的 NW.js 游戏；启动时会根据归档内容进一步识别具体类型。
+
+### 平台与文件要求
+
+- Android 8.0（API 26）及以上。
+- 当前原生引擎库仅提供 `arm64-v8a`，设备需为 64 位 ARM 架构。
+- 游戏目录需位于 Android 可访问的本地存储，并通过系统文件选择器（SAF）授权；启动时目录必须能够映射为真实文件路径，外置存储上的部分引擎可能需要“所有文件访问”权限。
+- 实际兼容性取决于游戏使用的引擎版本、封包/加密方式和脚本特性；特殊修改版可能需要调整引擎设置或补丁。
 
 ## 参与贡献
 
 欢迎参与项目开发与维护！
 
-在提交 Issue 或 Pull Request 前，请先阅读 [贡献指南](./CONTRIBUTING.md)。
-
-## 功能特性
-
-### 游戏库
-
-- **目录扫描**：通过系统文件选择器（SAF）添加游戏目录，自动识别并索引游戏，识别逻辑支持 Kirikiri(kr/krkr2)、ONS(ons)、Tyrano(ty)、Artemis(ar)
-- **卡片网格**：三列封面卡片布局，无封面时显示引擎标识占位
-- **搜索**：顶部栏搜索按钮，按游戏名实时模糊过滤（忽略大小写）
-- **最近游戏**：首页展示最近游玩记录，点击卡片弹出操作抽屉栏
-
-### 封面管理
-
-- **VNDB 自动获取**：一键为缺失封面的游戏批量拉取 VNDB 官方封面（带限速与失败容忍）
-- **手动搜索绑定**：弹窗内按游戏名搜索 VNDB 候选，确认后绑定并同步中文标题
-- **自定义封面**：从系统相册选择图片作为任意游戏的封面（保留 png/webp/jpg 原格式，自动清理旧封面）
-
-### 游戏操作（卡片抽屉栏）
-
-- 启动游戏（自动匹配引擎运行库）
-- 搜索 / 修改封面
-- 存档管理（应用内镜像备份，不动游戏原文件）
-- 引擎设置（含单游戏独立覆盖项）
-- KRKR 游戏在线补丁（远程 patch 索引下载安装）
-- 删除游戏（仅清理应用内记录与缓存，绝不触碰游戏文件）
-
-### 引擎设置
-
-- **Kirikiri**：引擎版本（自动/1.3.9/1.3.4/1.2.6）、内核（吉里吉里2 / krkrsdl3）、渲染器（软件/OpenGL）、纹理压缩、最大纹理尺寸、内存用量、FPS 限制、默认字体与强制字体、独立存档目录、精确渲染
-- **ONScripter**：文本编码（GBK/Shift-JIS/UTF-8）、全屏拉伸、忽略刘海、禁用视频、画面锐化
-- **Artemis**：引擎版本（V1/V2/V3）、画面反转、自动补丁策略
-- **Tyrano**：外部网络资源加载、独立存档目录
+在提交 Pull Request 前，请先阅读务必阅读遵守 [贡献指南](./CONTRIBUTING.md)。
+如果不符合贡献指南的要求，可能会被拒绝合并。
+代码务必符合项目整体风格，避免引入新的问题。
+提交前请务必使用项目内AGENT.md文件内的审核方式进行提交前审核。
+如果代码一眼丁真，一定拒绝合并。
 
 ## 技术架构
 
@@ -65,13 +66,6 @@
 - `app` 模块通过 `EngineLauncher` 将扫描结果映射到对应引擎 Activity 启动（SAF URI → 真实路径转换）
 - Tyrano 运行环境内置本地 HTTP 服务器、Asar 归档解析与 JS 钩子脚本（`__tyrano__.js` 等），无需外部依赖即可运行网页式脚本游戏
 - 原生库仅提供 `arm64-v8a` 架构
-
-### 关键流程
-
-1. **扫描**：添加 SAF 目录 → `EngineScanner` 递归识别游戏文件 → 按引擎类型分类入库
-2. **启动**：点击游戏 → `EngineLauncher` 按引擎选择启动器 → 加载对应 `.so` 与运行时
-3. **封面**：`VndbCoverService` 查询 VNDB API → 下载封面到应用缓存目录 → `coverUri` 持久化
-4. **存档**：`GameSaveManager` 将引擎存档目录镜像到应用内，删除游戏时同步清理镜像与应用数据
 
 ## 构建
 

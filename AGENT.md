@@ -82,11 +82,11 @@ Column(fillMaxSize)                                // 页面根
 
 页面内容（顶部栏除外）只允许使用**两种**文字尺寸，与引擎设置页保持一致：
 
-1. `MaterialTheme.typography.titleMedium` —— 卡片头、对话框标题、列表项主标题（可加粗）。
+1. `MaterialTheme.typography.titleMedium`（大字号，15sp，在 `theme/Type.kt` 中全局覆盖，Material 默认 16sp）—— 卡片头、对话框标题、列表项主标题（可加粗）。
 2. `MaterialTheme.typography.bodyMedium` —— 正文、行值、辅助描述、按钮文字、空态/错误提示。
 
 - **禁止**使用 `bodySmall` / `bodyLarge` / `labelMedium` / `labelLarge` / `headlineMedium` / `headlineSmall` 等其它排版尺寸。
-- Miuix preference 组件标题默认用 `headline1`(17sp)，已在 `MiuixSettingsTheme` 中全局覆盖为 16sp（`defaultTextStyles(headline1 = TextStyle(fontSize = 16.sp))`），使其严格落入两档；不要自行在单行上改字号。
+- Miuix preference 组件标题默认用 `headline1`(17sp)，已在 `MiuixSettingsTheme` 中全局覆盖为 15sp（`defaultTextStyles(headline1 = TextStyle(fontSize = 15.sp))`），使其严格落入两档并匹配 `titleMedium`；不要自行在单行上改字号。
 - 顶部栏标题不受此限制，仍用 `MaterialTheme.typography.titleLarge` Bold。
 
 ---
@@ -124,6 +124,57 @@ Column(fillMaxSize)                                // 页面根
 | VNDB 封面搜索 | `GameScreen.kt`（VndbSearchDialog） | `ic_game_search` | `search()` 网络请求 |
 | krkr 在线补丁过滤 | `KrkrOnlinePatchActivity.kt`（列表首项） | `ic_game_search` | 即时过滤，不传 |
 | 名称修改 | `GameScreen.kt`（RenameGameDialog） | `ic_sheet_rename` | 内容有效即保存 |
+
+---
+
+## 功能跳转条目统一规范
+
+所有「功能跳转列」——即点击后进入 / 跳转 / 打开下一级的条目（如封面来源列表、弹窗内的群聊/频道项、设置里的二级跳转项等），**必须**统一使用公共组件
+`com.tyranor.next.ui.common.AppNavItem`（`app/src/main/java/com/tyranor/next/ui/common/AppNavItem.kt`）。
+**禁止**在页面/弹窗内手写 `Row`/`Column` 拼装此类条目，也禁止混用 Material 的 `ListItem`/`ColumnItem` 等。
+
+### 1. 组件形态与参数
+
+- 排版固定：圆角 `RoundedCornerShape(8.dp)` + 背景取 `theme/Color.kt` 常量 `NavWhite` + 内边距（横向 16dp / 纵向 12dp）+ 左侧图标 24dp + 右侧指示箭头 `KeyboardArrowRight`。均由组件内部处理。
+- 标题用 `MaterialTheme.typography.bodyMedium`、颜色取 `TextColor`；摘要可选，用 `bodySmall` + 半透明辅助色。均不依赖 `colorScheme.surface*`（遵循「组件背景色统一规范」）。
+- `leadingIcon`：左侧图标 drawable；未提供时组件自动使用**默认占位图标** `DEFAULT_LEADING_ICON`，不允许调用方在不该出现空图标时留白。
+- `onClick`：点击回调；传 `null` 表示不可用（整条变灰且不可点击）。
+- 进入跳转的 icon 统一用 `KeyboardArrowRight`，组件内置，调用方不传。
+- **深色模式适配**：左侧图标（PNG drawable）与右侧箭头在深色模式下自动染色为 `Color.White`，浅色模式保持原色不变；不可点击状态（`onClick = null`）保留 `contentAlpha` 衰减。这一适配由组件内部完成，调用方无需处理。
+- 颜色判断依赖全局 `AppThemeColors.isDark` 快照，切换外观模式自动重组刷新，与整体主题保持同步。
+
+### 2. 现有调用点（新增场景照此对齐）
+
+| 场景 | 位置 | leadingIcon |
+|---|---|---|
+| 选择封面来源（四源统一） | `GameScreen.kt`（CoverSourcePickerDialog） | `ic_cover_source`（云端） |
+| 加入群聊（企鹅群聊/飞机频道） | `SettingsScreen.kt`（加入群聊弹窗） | `ic_group_qq` / `ic_group_telegram` |
+
+---
+
+## 开关按钮统一规范
+
+所有需要**布尔二态开关**（开/关）的场景，必须统一使用 **Miuix 风格** 的开关组件，禁止混用 Material3 的 `Switch` 或其他库的开关，避免深浅色 / 主题色 / 触感样式不一致。
+
+### 1. 组件选型（按场景二选一）
+
+- **设置条目式开关**（标题行 + 右侧开关，如设置清单中的配置项）：统一使用
+  `top.yukonga.miuix.kmp.preference.SwitchPreference`（title / checked / onCheckedChange）。
+- **行内独立开关**（列表项右端内嵌、无标题行的纯开关）：统一使用
+  `top.yukonga.miuix.kmp.basic.Switch`（checked / onCheckedChange）。
+
+### 2. 现有调用点（新增场景照此对齐）
+
+| 场景 | 位置 | 组件 |
+|---|---|---|
+| 设置清单开关（KRKR/ONS/Artemis/RPG Maker 等） | `SettingsScreen.kt` | `SwitchPreference` |
+| 应用设置开关（色调切换 / 圆角导航等） | `AppSettingsActivity.kt` | `SwitchPreference` |
+| 封面来源启用开关（行内） | `CoverScraperSettingsActivity.kt`（CoverSourceRow） | `Switch` |
+
+### 3. 例外
+
+- 三态「跟随全局 / 开 / 关」等**非布尔**选择（如 `PerGameSettingsScreen.kt` 的 `OverrideSwitch`）不属于开关按钮范畴，用 Miuix `OverlayDropdownPreference` 实现，不受本节约束。
+- 引擎原生代码（engine 模块）内的开关不属于 Compose 层，不适用本节。
 
 ---
 

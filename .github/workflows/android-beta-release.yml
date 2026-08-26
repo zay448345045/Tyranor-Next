@@ -59,8 +59,17 @@ jobs:
     if: needs.detect-version-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      HIKARINAGI_CLIENT_ID: ${{ vars.HIKARINAGI_CLIENT_ID }}
 
     steps:
+      - name: Validate release configuration
+        run: |
+          if [[ -z "${HIKARINAGI_CLIENT_ID}" ]]; then
+            echo "::error::Missing GitHub repository variable: HIKARINAGI_CLIENT_ID"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
 

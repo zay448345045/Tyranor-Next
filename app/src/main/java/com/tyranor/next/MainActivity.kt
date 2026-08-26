@@ -1,7 +1,9 @@
 package com.tyranor.next
 
+import android.Manifest
 import android.graphics.Color
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -15,10 +17,19 @@ import androidx.compose.ui.platform.LocalContext
 import com.tyranor.next.scanner.EnginePluginBootstrap
 import com.tyranor.next.theme.AppThemeColors
 import com.tyranor.next.theme.TyranorNextTheme
+import com.tyranor.next.updater.UpdateNotificationManager
 
 class MainActivity : ComponentActivity() {
+  private val notificationPermissionLauncher =
+    registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+
+    if (UpdateNotificationManager.shouldRequestPermission(this)) {
+      UpdateNotificationManager.markPermissionRequested(this)
+      notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
 
     // 首启自动安装引擎原生插件（幂等，放在后台线程避免首次复制阻塞 UI）
     Thread {

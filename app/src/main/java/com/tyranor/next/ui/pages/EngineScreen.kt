@@ -60,7 +60,11 @@ fun EngineScreen(modifier: Modifier = Modifier) {
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp + glassNavBottomInset()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(engines, key = { it.name }) { engine ->
+            items(
+                items = engines,
+                key = { it.name },
+                contentType = { "engine" },
+            ) { engine ->
                 EngineRow(engine)
             }
         }

@@ -1,12 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
+        android:name=".TyranorNextApplication"
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="false"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:requestLegacyExternalStorage="true"
@@ -15,6 +21,18 @@
         android:usesCleartextTraffic="true"
         android:windowSoftInputMode="adjustResize"
         android:theme="@style/Theme.TyranorNext">
+        <!-- WorkManager 首次切入后台时再按需初始化，避免进入前台时占用冷启动关键路径。 -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <activity
             android:name=".ui.pages.SaveManagementActivity"
             android:exported="false" />
@@ -25,11 +43,37 @@
             android:name=".ui.pages.EngineSettingsActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.pages.EngineSettingsMenuActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.pages.PerGameSettingsActivity"
             android:exported="false" />
         <activity
             android:name=".ui.pages.AppSettingsActivity"
             android:exported="false" />
+        <activity
+            android:name=".ui.pages.CoverScraperSettingsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.pages.HikarinagiOAuthCallbackActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TyranorNext.Translucent" />
+        <activity
+            android:name="net.openid.appauth.RedirectUriReceiverActivity"
+            android:exported="true"
+            tools:node="replace">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="oauth"
+                    android:path="/hikarinagi"
+                    android:scheme="tyranornext" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -14,7 +14,8 @@ import java.io.RandomAccessFile
 import java.util.Locale
 
 object NativeBridge {
-    private val OPEN_PFDS = ArrayList<ParcelFileDescriptor>()
+    @Volatile
+    private var SAF_DOCUMENTS: Map<String, Uri> = emptyMap()
     @Volatile
     private var krkrGameReadyListener: Runnable? = null
 
@@ -37,6 +38,17 @@ object NativeBridge {
         krkrGameReadyListener = listener
     }
 
+    @JvmStatic
+    fun configureSafMirror(indexPath: String?) {
+        SAF_DOCUMENTS = try {
+            KrSafMirror.loadIndex(indexPath)
+        } catch (t: Throwable) {
+            Log.e("NativeBridge", "load SAF mirror index failed path=$indexPath", t)
+            emptyMap()
+        }
+        Log.i("NativeBridge", "SAF mirror index entries=${SAF_DOCUMENTS.size}")
+    }
+
     @Synchronized
     @JvmStatic
     fun open(path: String?, mode: Int): Int {
@@ -51,6 +63,12 @@ object NativeBridge {
         } catch (t: Throwable) {
             Log.e("NativeBridge", "bad open mode=$mode path=$path", t)
             return -1
+        }
+        val mirrorUri = SAF_DOCUMENTS[target.lowercase(Locale.ROOT)]
+        val readOnly = (mode and OsConstants.O_ACCMODE) == OsConstants.O_RDONLY
+        if (readOnly && mirrorUri != null && File(target).length() == 0L) {
+            val mirrorFd = openDocumentUri(mirrorUri, mode)
+            if (mirrorFd >= 0) return mirrorFd
         }
         return try {
             val raf = RandomAccessFile(File(target), javaMode)
@@ -79,6 +97,15 @@ object NativeBridge {
 
     @JvmStatic
     fun redirect(path: String?): String? {
+        val raw = KrPathUtils.normalizeFilePath(path)
+        val normalized = KrPathUtils.canonicalizeKrStoragePath(raw)
+        KrPathUtils.redirectScopedSavePath(normalized)?.let { return it }
+        if (normalized != null && normalized != path) return normalized
+        return null
+    }
+
+    @JvmStatic
+    fun redirectScopedSave(path: String?): String? {
         val normalized = KrPathUtils.canonicalizeKrStoragePath(KrPathUtils.normalizeFilePath(path))
         return KrPathUtils.redirectScopedSavePath(normalized)
     }
@@ -104,17 +131,20 @@ object NativeBridge {
     private fun openViaSaf(path: String, mode: Int, directError: Throwable): Int {
         return try {
             val uri = storagePathToPersistedDocumentUri(path, mode) ?: return -1
-            val activity = KrPathUtils.currentActivity() ?: return -1
-            val pfdMode = toPfdMode(mode)
-            val pfd = activity.contentResolver.openFileDescriptor(uri, pfdMode) ?: return -1
-            OPEN_PFDS.add(pfd)
-            val fd = pfd.fd
-            Log.i("NativeBridge", "open SAF $fd $pfdMode $path -> $uri")
-            fd
+            openDocumentUri(uri, mode)
         } catch (safError: Throwable) {
             Log.w("NativeBridge", "open SAF fallback failed path=$path direct=$directError", safError)
             -1
         }
+    }
+
+    private fun openDocumentUri(uri: Uri, mode: Int): Int {
+        val activity = KrPathUtils.currentActivity() ?: return -1
+        val pfdMode = toPfdMode(mode)
+        val pfd = activity.contentResolver.openFileDescriptor(uri, pfdMode) ?: return -1
+        val fd = pfd.detachFd()
+        Log.i("NativeBridge", "open SAF $fd $pfdMode -> $uri")
+        return fd
     }
 
     @JvmStatic

@@ -36,6 +36,9 @@ object PerGameSettingsStore {
     const val F_ART_ROTATE = "art_rotate_screen"
     const val F_ART_PATCH = "art_auto_patch"
 
+    // RPG Maker MV/MZ
+    const val F_RPG_MAKER_MOD_ENABLED = "rpg_maker_mod_enabled"
+
     // ONS 子对象键
     const val ONS_KEY = "ons"
 

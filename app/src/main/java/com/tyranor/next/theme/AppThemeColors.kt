@@ -21,7 +21,7 @@ object AppThemeColors {
         private set
 
     /** 色调切换：控制页面背景色与组件色是否互换。 */
-    var toneSwitchEnabled by mutableStateOf(true)
+    var toneSwitchEnabled by mutableStateOf(AppSettingsStore.DEFAULT_TONE_SWITCH_ENABLED)
         private set
 
     /** 首次组合时从存储加载（幂等，避免每次重组都读 prefs）；

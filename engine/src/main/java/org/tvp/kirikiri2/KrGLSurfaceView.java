@@ -4,11 +4,9 @@ import android.content.Context;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import bridge.KrPathUtils;
-import com.core.engine.DoubleBackExit;
 import org.cocos2dx.lib.Cocos2dxGLSurfaceView;
 
 public final class KrGLSurfaceView extends Cocos2dxGLSurfaceView {
-    private boolean suppressBackUp;
 
     public KrGLSurfaceView(Context context) { super(context); }
 
@@ -51,14 +49,6 @@ public final class KrGLSurfaceView extends Cocos2dxGLSurfaceView {
     }
 
     @Override public final boolean onKeyDown(int keyCode, KeyEvent keyEvent) {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            KR2Activity activity = KrPathUtils.currentActivity();
-            if (!DoubleBackExit.shouldExit(activity)) {
-                suppressBackUp = true;
-                return true;
-            }
-            suppressBackUp = false;
-        }
         if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_ENTER && keyCode != KeyEvent.KEYCODE_MENU && keyCode != KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_UP:
@@ -76,10 +66,6 @@ public final class KrGLSurfaceView extends Cocos2dxGLSurfaceView {
     }
 
     @Override public final boolean onKeyUp(int keyCode, KeyEvent keyEvent) {
-        if (keyCode == KeyEvent.KEYCODE_BACK && suppressBackUp) {
-            suppressBackUp = false;
-            return true;
-        }
         if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_ENTER && keyCode != KeyEvent.KEYCODE_MENU && keyCode != KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_UP:

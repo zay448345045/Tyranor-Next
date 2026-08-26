@@ -62,6 +62,15 @@ internal object TyranoStorage {
         resolveFile(directory, key, extension)?.isFile == true
 
     @JvmStatic
+    fun remove(directory: File?, key: String?, extension: String): Boolean = try {
+        val file = resolveFile(directory, key, extension) ?: return false
+        !file.exists() || file.delete()
+    } catch (error: Throwable) {
+        Log.w(TAG, "removeStorage failed key=$key", error)
+        false
+    }
+
+    @JvmStatic
     fun resolveFile(directory: File?, key: String?): File? = resolveFile(directory, key, ".sav")
 
     @JvmStatic

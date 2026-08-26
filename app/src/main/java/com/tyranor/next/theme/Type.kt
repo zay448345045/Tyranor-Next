@@ -9,6 +9,15 @@ import androidx.compose.ui.unit.sp
 // Set of Material typography styles to start with
 val Typography =
   Typography(
+    // 统一规范大字号：titleMedium，由默认 16sp 调为 15sp
+    titleMedium =
+      TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Medium,
+        fontSize = 15.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.15.sp,
+      ),
     bodyLarge =
       TextStyle(
         fontFamily = FontFamily.Default,

@@ -107,16 +107,31 @@ public class ONScripter extends SDLActivity {
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
-        if (DoubleBackExit.dispatchBackKey(this, event, this::sendEscToOns)) return true;
+        // BACK 首按透传 ESC 给 ONS（游戏内取消/右键语义），2 秒内双击真正退出；
+        // ESC 的 down+up 在 DOWN 时成对发送，UP 一律吞掉，避免重复/悬空事件。
+        if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            switch (event.getAction()) {
+                case KeyEvent.ACTION_DOWN:
+                    if (event.getRepeatCount() == 0) {
+                        if (DoubleBackExit.shouldExit(this)) finish();
+                        else sendEscToOns();
+                    }
+                    return true;
+                default:
+                    return true;
+            }
+        }
         return super.dispatchKeyEvent(event);
     }
 
     @Override public void onBackPressed() {
-        DoubleBackExit.handleBack(this, this::sendEscToOns);
+        // 无视图消费 BACK 时的兜底路径：只布防退出窗口，不向游戏透传
+        if (DoubleBackExit.shouldExit(this)) finish();
     }
 
     @Override protected void exitFromBack() {
-        sendEscToOns();
+        // 基类旧路径（dispatchBackKey/预测回调）的兜底：真正退出而非发 ESC
+        finish();
     }
 
     private void sendEscToOns() {

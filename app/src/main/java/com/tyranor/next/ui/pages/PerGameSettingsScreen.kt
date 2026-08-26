@@ -80,6 +80,11 @@ fun PerGameSettingsScreen(game: ScanGame) {
 
     var tyExternal by remember { mutableStateOf(PerGameSettingsStore.getBool(ctx, gid, "ty_external")) }
     var tyScoped by remember { mutableStateOf(PerGameSettingsStore.getBool(ctx, gid, "ty_scoped")) }
+    var rpgMakerMod by remember {
+        mutableStateOf(
+            PerGameSettingsStore.getBool(ctx, gid, PerGameSettingsStore.F_RPG_MAKER_MOD_ENABLED),
+        )
+    }
 
     val fontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -93,15 +98,19 @@ fun PerGameSettingsScreen(game: ScanGame) {
     val globalKrScoped = EngineSettingsStore.isKrScopedSaveDir(ctx)
     val globalKrFont = EngineSettingsStore.getKrDefaultFont(ctx)
     val globalForce = EngineSettingsStore.isKrForceDefaultFont(ctx)
-    val globalRenderer = EngineSettingsStore.getKrRenderer(ctx)
+    val configuredGlobalRenderer = EngineSettingsStore.getKrRenderer(ctx)
     val globalOns = remember { EngineSettingsStore.loadOns(ctx) }
     val globalArtVersion = EngineSettingsStore.getArtEngineVersion(ctx)
     val globalArtRotate = EngineSettingsStore.isArtRotateScreen(ctx)
     val globalArtPatch = EngineSettingsStore.getArtAutoPatch(ctx)
     val globalTyExternal = EngineSettingsStore.isTyranoExternalNetwork(ctx)
     val globalTyScoped = EngineSettingsStore.isTyranoScopedSaveDir(ctx)
+    val globalRpgMakerMod = EngineSettingsStore.isRpgMakerModEnabled(ctx)
 
     val isSdl3 = (krKernel ?: globalKrKernel) == EngineSettingsStore.KERNEL_KRKRSDL3
+    val globalRenderer = configuredGlobalRenderer.ifEmpty {
+        if (isSdl3) EngineSettingsStore.RENDERER_OPENGL else ""
+    }
     val effVersion = krVersion ?: globalKrVersion
     val krIs134126 = effVersion == EngineSettingsStore.KR_134 || effVersion == EngineSettingsStore.KR_126
 
@@ -136,6 +145,12 @@ fun PerGameSettingsScreen(game: ScanGame) {
         PerGameSettingsStore.setOnsOverride(ctx, gid, onsObj)
         PerGameSettingsStore.setBool(ctx, gid, "ty_external", tyExternal)
         PerGameSettingsStore.setBool(ctx, gid, "ty_scoped", tyScoped)
+        PerGameSettingsStore.setBool(
+            ctx,
+            gid,
+            PerGameSettingsStore.F_RPG_MAKER_MOD_ENABLED,
+            rpgMakerMod,
+        )
     }
 
     MiuixSettingsTheme {
@@ -174,18 +189,20 @@ fun PerGameSettingsScreen(game: ScanGame) {
                                 OverrideChoice("引擎内核", KR_KERNEL_MAP2, globalKrKernel, krKernel) { krKernel = it }
                             }
                         }
-                        if (!isSdl3) {
-                            item {
-                                SectionCard("渲染") {
+                        item {
+                            SectionCard("渲染") {
+                                if (!isSdl3) {
                                     OverrideSwitch("OpenGL 精确渲染", globalAccurate, krRender[PerGameSettingsStore.F_OGL_ACCURATE_RENDER]!!.value == "1") { b ->
                                         krRender[PerGameSettingsStore.F_OGL_ACCURATE_RENDER]!!.value = when (b) { null -> ""; true -> "1"; false -> "0" }
                                     }
                                     OverrideChoice("内存用量", KR_MEM_MAP2, globalMem, krRender[PerGameSettingsStore.F_MEM_USAGE]!!.value, emptyLabel = "引擎默认") {
                                         krRender[PerGameSettingsStore.F_MEM_USAGE]!!.value = it
                                     }
-                                    OverrideChoice("渲染器", KR_RENDERER_MAP2, globalRenderer, krRender[PerGameSettingsStore.F_RENDERER]!!.value, emptyLabel = "引擎默认") {
-                                        krRender[PerGameSettingsStore.F_RENDERER]!!.value = it
-                                    }
+                                }
+                                OverrideChoice("渲染器", KR_RENDERER_MAP2, globalRenderer, krRender[PerGameSettingsStore.F_RENDERER]!!.value, emptyLabel = "引擎默认") {
+                                    krRender[PerGameSettingsStore.F_RENDERER]!!.value = it
+                                }
+                                if (!isSdl3) {
                                     if (effRenderer == "" || effRenderer == EngineSettingsStore.RENDERER_SOFTWARE) {
                                         OverrideChoice("软件渲染线程数", KR_THREAD_MAP2, globalDrawThread, krRender[PerGameSettingsStore.F_SOFTWARE_DRAW_THREAD]!!.value, emptyLabel = "自动") {
                                             krRender[PerGameSettingsStore.F_SOFTWARE_DRAW_THREAD]!!.value = it
@@ -209,6 +226,8 @@ fun PerGameSettingsScreen(game: ScanGame) {
                                     }
                                 }
                             }
+                        }
+                        if (!isSdl3) {
                             item {
                                 SectionCard("字体") {
                                     OverrideFont("默认字体", globalKrFont, krFont, onReset = { krFont = "" }, onPick = { fontLauncher.launch("*/*") })
@@ -246,6 +265,9 @@ fun PerGameSettingsScreen(game: ScanGame) {
                             OverrideSwitch("允许外部网络", globalTyExternal, tyExternal) { tyExternal = it }
                             if (game.engine !in setOf(EngineType.VN, EngineType.WEB_OTHER)) {
                                 OverrideSwitch("独立存档目录", globalTyScoped, tyScoped) { tyScoped = it }
+                            }
+                            if (game.engine == EngineType.RPG_MV || game.engine == EngineType.RPG_MZ) {
+                                OverrideSwitch("游戏修改器", globalRpgMakerMod, rpgMakerMod) { rpgMakerMod = it }
                             }
                         }
                     }

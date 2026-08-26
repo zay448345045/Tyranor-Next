@@ -101,6 +101,7 @@ FopenFn gOriginalFopen = nullptr;
 FopenFn gOriginalFopen64 = nullptr;
 StatFn gOriginalStat = nullptr;
 StatFn gOriginalLstat = nullptr;
+Stat64Fn gOriginalStat64 = nullptr;
 Stat64Fn gOriginalLstat64 = nullptr;
 AccessFn gOriginalAccess = nullptr;
 RenameFn gOriginalRename = nullptr;
@@ -324,8 +325,8 @@ int callJavaOpen(const char* path, int flags) {
     return fd;
 }
 
-std::string callJavaRedirect(const char* path) {
-    if (gVm == nullptr || path == nullptr) return {};
+std::string callJavaPathMethod(const char* path, const char* methodName) {
+    if (gVm == nullptr || path == nullptr || methodName == nullptr) return {};
     JNIEnv* env = nullptr;
     bool attached = false;
     if (gVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
@@ -337,7 +338,7 @@ std::string callJavaRedirect(const char* path) {
     jclass clazz = env->FindClass("bridge/NativeBridge");
     if (clazz != nullptr) {
         jmethodID method = env->GetStaticMethodID(
-                clazz, "redirect", "(Ljava/lang/String;)Ljava/lang/String;");
+                clazz, methodName, "(Ljava/lang/String;)Ljava/lang/String;");
         if (method != nullptr) {
             jstring javaPath = env->NewStringUTF(path);
             if (javaPath != nullptr) {
@@ -360,16 +361,29 @@ std::string callJavaRedirect(const char* path) {
     return result;
 }
 
+std::string callJavaRedirect(const char* path) {
+    return callJavaPathMethod(path, "redirect");
+}
+
+std::string callJavaScopedSaveRedirect(const char* path) {
+    return callJavaPathMethod(path, "redirectScopedSave");
+}
+
 int hookOpenCommon(OpenFn original, const char* path, int flags, va_list arguments) {
     mode_t mode = 0;
     if ((flags & O_CREAT) != 0) mode = static_cast<mode_t>(va_arg(arguments, int));
     if (!pathMatchesPrefix(path)) return callOriginal(original, path, flags, mode);
 
-    const std::string redirected = callJavaRedirect(path);
-    if (!redirected.empty()) return callOriginal(original, redirected.c_str(), flags, mode);
+    const std::string scopedSave = callJavaScopedSaveRedirect(path);
+    if (!scopedSave.empty()) return callOriginal(original, scopedSave.c_str(), flags, mode);
+
+    // Preserve the existing Java-first order for regular paths: SAF mirrors use
+    // zero-byte placeholders that libc can open, while Java supplies real content.
     const int fd = callJavaOpen(path, flags);
     if (fd >= 0) return fd;
-    return callOriginal(original, path, flags, mode);
+
+    const std::string redirected = callJavaRedirect(path);
+    return callOriginal(original, redirected.empty() ? path : redirected.c_str(), flags, mode);
 }
 
 int hookedOpen(const char* path, int flags, ...) {
@@ -405,8 +419,11 @@ int fopenModeToFlags(const char* mode) {
 
 FILE* hookFopenCommon(FopenFn original, const char* path, const char* mode) {
     if (!pathMatchesPrefix(path)) return original == nullptr ? nullptr : original(path, mode);
-    const std::string redirected = callJavaRedirect(path);
-    if (!redirected.empty()) return original == nullptr ? nullptr : original(redirected.c_str(), mode);
+    const std::string scopedSave = callJavaScopedSaveRedirect(path);
+    if (!scopedSave.empty()) {
+        return original == nullptr ? nullptr : original(scopedSave.c_str(), mode);
+    }
+
     const int flags = fopenModeToFlags(mode);
     if (flags >= 0) {
         const int fd = callJavaOpen(path, flags);
@@ -416,7 +433,10 @@ FILE* hookFopenCommon(FopenFn original, const char* path, const char* mode) {
             close(fd);
         }
     }
-    return original == nullptr ? nullptr : original(path, mode);
+
+    const std::string redirected = callJavaRedirect(path);
+    return original == nullptr ? nullptr
+            : original(redirected.empty() ? path : redirected.c_str(), mode);
 }
 
 FILE* hookedFopen(const char* path, const char* mode) {
@@ -441,6 +461,10 @@ int hookedStat(const char* path, struct stat* info) {
 
 int hookedLstat(const char* path, struct stat* info) {
     return hookSinglePath(gOriginalLstat, path, info);
+}
+
+int hookedStat64(const char* path, struct stat64* info) {
+    return hookSinglePath(gOriginalStat64, path, info);
 }
 
 int hookedLstat64(const char* path, struct stat64* info) {
@@ -673,6 +697,8 @@ Java_bridge_NativeBridge_relocate(JNIEnv*, jclass) {
             || hookGotSymbol(library, "stat", reinterpret_cast<void*>(hookedStat), &gOriginalStat);
     const bool lstatHooked = gOriginalLstat != nullptr
             || hookGotSymbol(library, "lstat", reinterpret_cast<void*>(hookedLstat), &gOriginalLstat);
+    const bool stat64Hooked = gOriginalStat64 != nullptr
+            || hookGotSymbol(library, "stat64", reinterpret_cast<void*>(hookedStat64), &gOriginalStat64);
     const bool lstat64Hooked = gOriginalLstat64 != nullptr
             || hookGotSymbol(library, "lstat64", reinterpret_cast<void*>(hookedLstat64), &gOriginalLstat64);
     const bool accessHooked = gOriginalAccess != nullptr
@@ -695,7 +721,8 @@ Java_bridge_NativeBridge_relocate(JNIEnv*, jclass) {
             | (lstat64Hooked ? 64 : 0) | (accessHooked ? 128 : 0)
             | (renameHooked ? 256 : 0) | (unlinkHooked ? 512 : 0)
             | (removeHooked ? 1024 : 0) | (mkdirHooked ? 2048 : 0)
-            | (rmdirHooked ? 4096 : 0) | (opendirHooked ? 8192 : 0);
+            | (rmdirHooked ? 4096 : 0) | (opendirHooked ? 8192 : 0)
+            | (stat64Hooked ? 16384 : 0);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

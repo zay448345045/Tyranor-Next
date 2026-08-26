@@ -2,4 +2,5 @@
 <resources>
 
     <style name="Theme.TyranorNext" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.TyranorNext.Translucent" parent="android:style/Theme.Translucent.NoTitleBar" />
 </resources>

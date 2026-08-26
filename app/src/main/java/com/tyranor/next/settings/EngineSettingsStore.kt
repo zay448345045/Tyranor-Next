@@ -33,9 +33,10 @@ object EngineSettingsStore {
     const val KEY_ARTEMIS_ROTATE_SCREEN = "artemis_rotate_screen"
     const val KEY_ARTEMIS_AUTO_PATCH = "artemis_auto_patch"
 
-    // Tyrano
+    // Tyrano 与 RPG Maker Web 共用同一套 WebView 宿主设置；启动链路按同一键读取。
     const val KEY_TYRANO_EXTERNAL_NETWORK = "tyrano_external_network"
     const val KEY_TYRANO_SCOPED_SAVE_DIR = "tyrano_scoped_save_dir"
+    const val KEY_RPG_MAKER_MOD_ENABLED = "rpg_maker_mod_enabled"
 
     // 取值常量
     const val KR_AUTO = "auto"
@@ -200,4 +201,6 @@ object EngineSettingsStore {
     fun setTyranoExternalNetwork(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_TYRANO_EXTERNAL_NETWORK, b).apply()
     fun isTyranoScopedSaveDir(c: Context): Boolean = prefs(c).getBoolean(KEY_TYRANO_SCOPED_SAVE_DIR, true)
     fun setTyranoScopedSaveDir(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_TYRANO_SCOPED_SAVE_DIR, b).apply()
+    fun isRpgMakerModEnabled(c: Context): Boolean = prefs(c).getBoolean(KEY_RPG_MAKER_MOD_ENABLED, true)
+    fun setRpgMakerModEnabled(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_RPG_MAKER_MOD_ENABLED, b).apply()
 }

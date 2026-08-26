@@ -2,6 +2,7 @@ package com.tyranor.next.ui.pages
 
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -26,40 +27,51 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import com.tyranor.next.R
+import com.tyranor.next.settings.AppSettingsStore
 import com.tyranor.next.settings.EngineSettingsStore
+import com.tyranor.next.scanner.EngineScanner
+import com.tyranor.next.theme.AppThemeColors
 import com.tyranor.next.theme.MiuixSettingsTheme
 import com.tyranor.next.theme.NavWhite
+import com.tyranor.next.ui.common.AppNavItem
 import com.tyranor.next.ui.common.TopBarIcon
 import com.tyranor.next.ui.common.glassNavBottomInset
 import com.tyranor.next.updater.GitHubUpdateChecker
 import com.tyranor.next.updater.UpdateCheckResult
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
 import top.yukonga.miuix.kmp.basic.Scaffold as MiuixScaffold
 import top.yukonga.miuix.kmp.basic.Slider
@@ -77,6 +89,21 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateAvailable by remember { mutableStateOf<UpdateCheckResult.UpdateAvailable?>(null) }
     var showGroupDialog by remember { mutableStateOf(false) }
+    var showScanDirs by remember { mutableStateOf(false) }
+    var scanDirs by remember { mutableStateOf(EngineScanner.loadRoots(ctx)) }
+    val dirPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { u ->
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(
+                    u,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            EngineScanner.saveRoot(ctx, u)
+            scanDirs = EngineScanner.loadRoots(ctx)
+        }
+    }
 
     fun checkUpdate() {
         if (checkingUpdate) return
@@ -107,25 +134,70 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 contentPadding = PaddingValues(top = innerPadding.calculateTopPadding() + 12.dp, bottom = 24.dp + glassNavBottomInset()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                EngineSettingsKind.entries.forEach { kind ->
-                    item {
-                        MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
-                            Column(Modifier.padding(vertical = 4.dp)) {
-                                ArrowPreference(
-                                    title = kind.title,
-                                    startAction = {
-                                        Icon(
-                                            painter = painterResource(kind.iconRes),
-                                            contentDescription = kind.title,
-                                            tint = MiuixTheme.colorScheme.primary,
-                                            modifier = Modifier.padding(end = 6.dp).size(24.dp),
-                                        )
-                                    },
-                                    onClick = {
-                                        startActivityWithPageTransition(ctx, EngineSettingsActivity.createIntent(ctx, kind))
-                                    },
+                item {
+                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                        Column(Modifier.padding(vertical = 4.dp)) {
+                            ArrowPreference(
+                                title = "游戏目录添加",
+                                summary = "${scanDirs.size} 个目录",
+                                onClick = { showScanDirs = true },
+                            )
+                            var depth by remember { mutableIntStateOf(AppSettingsStore.getScanDepth(ctx)) }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "扫描深度",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    "$depth 级",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            Slider(
+                                value = depth.toFloat(),
+                                onValueChange = { depth = it.roundToInt().coerceIn(1, 5) },
+                                onValueChangeFinished = { AppSettingsStore.setScanDepth(ctx, depth) },
+                                valueRange = 1f..5f,
+                                showKeyPoints = true,
+                                keyPoints = (1..5).map { it.toFloat() },
+                                magnetThreshold = 0.25f,
+                                hapticEffect = SliderDefaults.SliderHapticEffect.Step,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                            var gameSort by remember { mutableStateOf(AppSettingsStore.getGameSort(ctx)) }
+                            val gameSortModes = listOf(
+                                AppSettingsStore.GAME_SORT_ALPHA to "字母大小",
+                                AppSettingsStore.GAME_SORT_BRACKET_TAG to "括号标签",
+                            )
+                            val sortIndex = gameSortModes.indexOfFirst { it.first == gameSort }
+                                .let { if (it < 0) 0 else it }
+                            OverlayDropdownPreference(
+                                title = "游戏排序",
+                                items = gameSortModes.map { it.second },
+                                selectedIndex = sortIndex,
+                                onSelectedIndexChange = { index ->
+                                    gameSortModes.getOrNull(index)?.first?.let { sort ->
+                                        gameSort = sort
+                                        AppSettingsStore.setGameSort(ctx, sort)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+                item {
+                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                        Column(Modifier.padding(vertical = 4.dp)) {
+                            ArrowPreference(
+                                title = "引擎设置",
+                                startAction = { SettingsItemIcon(R.drawable.ic_engine_manage) },
+                                onClick = { startActivityWithPageTransition(ctx, EngineSettingsMenuActivity.createIntent(ctx)) },
+                            )
                         }
                     }
                 }
@@ -137,6 +209,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                                 summary = "有关应用内的各项配置",
                                 startAction = { SettingsItemIcon(R.drawable.ic_settings_app) },
                                 onClick = { startActivityWithPageTransition(ctx, AppSettingsActivity.createIntent(ctx)) },
+                            )
+                            ArrowPreference(
+                                title = "封面刮削",
+                                summary = "设置多源封面来源、顺序与授权",
+                                startAction = { SettingsItemIcon(R.drawable.ic_game_cover) },
+                                onClick = { startActivityWithPageTransition(ctx, CoverScraperSettingsActivity.createIntent(ctx)) },
                             )
                             ArrowPreference(
                                 title = if (checkingUpdate) "正在检查更新" else "更新检查",
@@ -160,6 +238,76 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         }
     }
 
+    if (showScanDirs) {
+        AppAlertDialog(
+            onDismissRequest = { showScanDirs = false },
+            title = { Text("游戏目录", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (scanDirs.isEmpty()) {
+                        Text(
+                            "暂无游戏目录",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    scanDirs.forEach { dir ->
+                        // 目录被改名/删除或权限失效后标记为已失效，提示用户手动清理。
+                        // DocumentFile.isDirectory 可能触发 binder 调用，放到 IO 线程执行。
+                        val valid by produceState(initialValue = false, dir) {
+                            value = withContext(Dispatchers.IO) { isScanDirValid(ctx, dir) }
+                        }
+                        // Miuix 风格条目：圆角卡片 + 文件夹图标 + 目录名 + 删除按钮
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(NavWhite)
+                                .padding(start = 16.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Folder,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp),
+                            )
+                            Text(
+                                if (valid) scanDirName(ctx, dir) else "${scanDirName(ctx, dir)}（已失效）",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (valid) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                            )
+                            TextButton(
+                                onClick = {
+                                    EngineScanner.removeRootAndGames(ctx, android.net.Uri.parse(dir))
+                                    scanDirs = EngineScanner.loadRoots(ctx)
+                                },
+                            ) {
+                                Text("删除", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { dirPicker.launch(null) },
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) { Text("添加目录") }
+                    TextButton(onClick = { showScanDirs = false }) { Text("完成") }
+                }
+            },
+        )
+    }
+
     if (showGroupDialog) {
         AppAlertDialog(
             onDismissRequest = { showGroupDialog = false },
@@ -169,11 +317,11 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    GroupChannelItem("企鹅群聊", R.drawable.ic_group_qq) {
+                    AppNavItem("企鹅群聊", leadingIcon = R.drawable.ic_group_qq) {
                         showGroupDialog = false
                         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://qm.qq.com/q/M9JH8A9Yys")))
                     }
-                    GroupChannelItem("飞机频道", R.drawable.ic_group_telegram) {
+                    AppNavItem("飞机频道", leadingIcon = R.drawable.ic_group_telegram) {
                         showGroupDialog = false
                         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/tyranornext")))
                     }
@@ -249,6 +397,7 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
 
     var tyExternal by remember { mutableStateOf(EngineSettingsStore.isTyranoExternalNetwork(ctx)) }
     var tyScoped by remember { mutableStateOf(EngineSettingsStore.isTyranoScopedSaveDir(ctx)) }
+    var rpgMakerMod by remember { mutableStateOf(EngineSettingsStore.isRpgMakerModEnabled(ctx)) }
 
     val fontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -283,6 +432,7 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
         EngineSettingsStore.setArtAutoPatch(ctx, artPatch)
         EngineSettingsStore.setTyranoExternalNetwork(ctx, tyExternal)
         EngineSettingsStore.setTyranoScopedSaveDir(ctx, tyScoped)
+        EngineSettingsStore.setRpgMakerModEnabled(ctx, rpgMakerMod)
     }
 
     MiuixSettingsTheme {
@@ -319,7 +469,7 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
                 kind,
                 krVersion, krKernel, krScoped, krFont, krForceFont, krRenderer, krDrawThread,
                 krSwCompress, krOglCompress, krMem, krTexsize, krAccurate, krFps, isSdl3, krIs134126,
-                ons, artVersion, artRotate, artPatch, tyExternal, tyScoped, fontLauncher,
+                ons, artVersion, artRotate, artPatch, tyExternal, tyScoped, rpgMakerMod, fontLauncher,
                 topInset = innerPadding.calculateTopPadding(),
                 onKrVersion = { krVersion = it },
                 onKrKernel = { krKernel = it },
@@ -340,16 +490,10 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
                 onArtPatch = { artPatch = it },
                 onTyExternal = { tyExternal = it },
                 onTyScoped = { tyScoped = it },
+                onRpgMakerMod = { rpgMakerMod = it },
             )
         }
     }
-}
-
-enum class EngineSettingsKind(val title: String, @param:DrawableRes val iconRes: Int) {
-    KRKR("KRKR引擎设置", R.drawable.ic_settings_engine),
-    ONS("ONS引擎设置", R.drawable.ic_settings_engine),
-    ARTEMIS("Artemis引擎设置", R.drawable.ic_settings_engine),
-    TYRANO("Tyrano引擎设置", R.drawable.ic_settings_engine),
 }
 
 @Composable
@@ -357,38 +501,10 @@ private fun SettingsItemIcon(@DrawableRes iconRes: Int) {
     Image(
         painter = painterResource(iconRes),
         contentDescription = null,
+        // 深色模式下整体染白，保证低亮度背景上的可读性
+        colorFilter = if (AppThemeColors.isDark) ColorFilter.tint(Color.White) else null,
         modifier = Modifier.padding(end = 6.dp).size(24.dp),
     )
-}
-
-/** 统一弹窗内的群聊/频道选项项：左侧 logo + 名称 + 右侧指示箭头。 */
-@Composable
-private fun GroupChannelItem(label: String, iconRes: Int, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .background(NavWhite)
-            .padding(vertical = 12.dp, horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Image(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(start = 12.dp).weight(1f),
-        )
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MiuixTheme.colorScheme.onBackground,
-        )
-    }
 }
 
 /** 顶部栏：遵守全局规范（Column + 页面背景色 + statusBarsPadding + 64dp 标题区，沉浸式）。 */
@@ -421,7 +537,7 @@ private fun LazyListPlaceholder(
     krRenderer: String, krDrawThread: String, krSwCompress: String, krOglCompress: String,
     krMem: String, krTexsize: String, krAccurate: String, krFps: String, isSdl3: Boolean, krIs134126: Boolean,
     ons: EngineSettingsStore.Ons, artVersion: String, artRotate: Boolean, artPatch: String,
-    tyExternal: Boolean, tyScoped: Boolean, fontLauncher: FontPickerLauncher,
+    tyExternal: Boolean, tyScoped: Boolean, rpgMakerMod: Boolean, fontLauncher: FontPickerLauncher,
     topInset: Dp,
     onKrVersion: (String) -> Unit, onKrKernel: (String) -> Unit, onKrScoped: (Boolean) -> Unit,
     onKrForceFont: (Boolean) -> Unit, onKrRenderer: (String) -> Unit, onKrDrawThread: (String) -> Unit,
@@ -429,7 +545,7 @@ private fun LazyListPlaceholder(
     onKrTexsize: (String) -> Unit, onKrAccurate: (String) -> Unit, onKrFps: (String) -> Unit,
     onResetKrFont: () -> Unit, onOns: (EngineSettingsStore.Ons) -> Unit,
     onArtVersion: (String) -> Unit, onArtRotate: (Boolean) -> Unit, onArtPatch: (String) -> Unit,
-    onTyExternal: (Boolean) -> Unit, onTyScoped: (Boolean) -> Unit,
+    onTyExternal: (Boolean) -> Unit, onTyScoped: (Boolean) -> Unit, onRpgMakerMod: (Boolean) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
@@ -444,21 +560,29 @@ private fun LazyListPlaceholder(
             }
         }
 
-        if (kind == EngineSettingsKind.KRKR && !isSdl3) item {
+        if (kind == EngineSettingsKind.KRKR) item {
             EngineCard("渲染") {
-                SwitchPreference(title = "OpenGL 精确渲染", checked = krAccurate == "1", onCheckedChange = { b -> onKrAccurate(if (b) "1" else "0") })
-                EnumSliderRow("内存用量", KR_MEM_MAP, krMem, onKrMem)
-                DropdownRow("渲染器", KR_RENDERER_MAP, krRenderer.ifEmpty { "default" }) {
-                    onKrRenderer(if (it == "default") "" else it)
+                if (!isSdl3) {
+                    SwitchPreference(title = "OpenGL 精确渲染", checked = krAccurate == "1", onCheckedChange = { b -> onKrAccurate(if (b) "1" else "0") })
+                    EnumSliderRow("内存用量", KR_MEM_MAP, krMem, onKrMem)
                 }
-                if (krRenderer == "" || krRenderer == EngineSettingsStore.RENDERER_SOFTWARE) {
+                val rendererOptions = if (isSdl3) KR_SDL3_RENDERER_MAP else KR_RENDERER_MAP
+                val selectedRenderer = if (isSdl3) {
+                    krRenderer.ifEmpty { EngineSettingsStore.RENDERER_OPENGL }
+                } else {
+                    krRenderer.ifEmpty { "default" }
+                }
+                DropdownRow("渲染器", rendererOptions, selectedRenderer) {
+                    onKrRenderer(if (!isSdl3 && it == "default") "" else it)
+                }
+                if (!isSdl3 && (krRenderer == "" || krRenderer == EngineSettingsStore.RENDERER_SOFTWARE)) {
                     EnumSliderRow("软件渲染线程数", KR_THREAD_MAP, krDrawThread, onKrDrawThread)
                     DropdownRow("软件纹理压缩", KR_SW_COMPRESS_MAP, krSwCompress, onKrSwCompress)
                 }
-                if (!krIs134126) {
+                if (!isSdl3 && !krIs134126) {
                     EnumSliderRow("FPS 限制", KR_FPS_MAP, krFps, onKrFps)
                 }
-                if (krRenderer == "" || krRenderer == EngineSettingsStore.RENDERER_OPENGL) {
+                if (!isSdl3 && (krRenderer == "" || krRenderer == EngineSettingsStore.RENDERER_OPENGL)) {
                     DropdownRow("OpenGL 纹理压缩", KR_OGL_COMPRESS_MAP, krOglCompress, onKrOglCompress)
                     EnumSliderRow("最大纹理尺寸", KR_TEXSIZE_MAP, krTexsize, onKrTexsize)
                 }
@@ -502,8 +626,17 @@ private fun LazyListPlaceholder(
 
         if (kind == EngineSettingsKind.TYRANO) item {
             EngineCard("Tyrano") {
+                // RPG Maker Web 与 Tyrano 共用同一套 WebView 宿主开关，避免同类引擎重复配置。
                 SwitchPreference(title = "允许加载外部网络资源", checked = tyExternal, onCheckedChange = onTyExternal)
                 SwitchPreference(title = "独立存档目录", checked = tyScoped, onCheckedChange = onTyScoped)
+            }
+        }
+
+        if (kind == EngineSettingsKind.RPG_MAKER) item {
+            EngineCard("RPG Maker MV/MZ") {
+                SwitchPreference(title = "允许加载外部网络资源", checked = tyExternal, onCheckedChange = onTyExternal)
+                SwitchPreference(title = "独立存档目录", checked = tyScoped, onCheckedChange = onTyScoped)
+                SwitchPreference(title = "游戏修改器", checked = rpgMakerMod, onCheckedChange = onRpgMakerMod)
             }
         }
 
@@ -655,6 +788,10 @@ private val KR_RENDERER_MAP = listOf(
     EngineSettingsStore.RENDERER_SOFTWARE to "软件渲染",
     EngineSettingsStore.RENDERER_OPENGL to "OpenGL",
 )
+private val KR_SDL3_RENDERER_MAP = listOf(
+    EngineSettingsStore.RENDERER_OPENGL to "OpenGL（默认）",
+    EngineSettingsStore.RENDERER_SOFTWARE to "软件渲染",
+)
 private val KR_THREAD_MAP = listOf("0" to "自动") + (1..8).map { it.toString() to "$it 线程" }
 private val KR_SW_COMPRESS_MAP = listOf(
     "" to "引擎默认", "none" to "无", "halfline" to "半行", "lz4" to "LZ4", "lz4+tlg5" to "LZ4+TLG5",
@@ -685,3 +822,15 @@ private val ART_PATCH_MAP = listOf(
     EngineSettingsStore.AUTO_PATCH_AUTO to "自动",
     EngineSettingsStore.AUTO_PATCH_OFF to "关闭",
 )
+
+/** 游戏目录 URI → 可读目录名（取 SAF documentId 的最后一段，失败回退原 uri）。 */
+private fun scanDirName(context: android.content.Context, uri: String): String = runCatching {
+    val docId = DocumentsContract.getTreeDocumentId(android.net.Uri.parse(uri))
+    docId.substringAfterLast(':').substringAfterLast('/').ifBlank { uri }
+}.getOrDefault(uri)
+
+/** 游戏根目录是否仍可访问（被改名/删除/权限失效时返回 false；TF 卡暂时拔出也会显示失效，重插后恢复）。 */
+private fun isScanDirValid(context: android.content.Context, uri: String): Boolean = runCatching {
+    val doc = DocumentFile.fromTreeUri(context, android.net.Uri.parse(uri))
+    doc != null && doc.isDirectory
+}.getOrDefault(false)

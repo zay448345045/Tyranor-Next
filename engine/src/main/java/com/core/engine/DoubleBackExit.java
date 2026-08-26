@@ -1,11 +1,7 @@
 package com.core.engine;
 
 import android.app.Activity;
-import android.os.Build;
 import android.view.KeyEvent;
-import android.widget.Toast;
-import android.window.OnBackInvokedCallback;
-import android.window.OnBackInvokedDispatcher;
 
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -30,7 +26,6 @@ public final class DoubleBackExit {
             return true;
         }
         LAST_BACK_TIME.put(activity, now);
-        Toast.makeText(activity, "再按一次返回退出游戏", Toast.LENGTH_SHORT).show();
         return false;
     }
 
@@ -51,20 +46,6 @@ public final class DoubleBackExit {
             return true;
         }
         return event.getAction() == KeyEvent.ACTION_MULTIPLE;
-    }
-
-    public static Object registerPredictiveBack(Activity activity, ExitAction action) {
-        if (activity == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null;
-        OnBackInvokedCallback callback = () -> handleBack(activity, action);
-        activity.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
-                callback);
-        return callback;
-    }
-
-    public static void unregisterPredictiveBack(Activity activity, Object callback) {
-        if (activity == null || callback == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
-        activity.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback((OnBackInvokedCallback) callback);
     }
 
     public static void clear(Activity activity) {

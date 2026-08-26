@@ -91,7 +91,6 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     protected static DummyEdit mTextEdit;
     Handler commandHandler = new SDLCommandHandler();
     protected final int[] messageboxSelection = new int[1];
-    private Object backInvokedCallback;
     private final Runnable rehideSystemUi = new Runnable() { // from class: org.libsdl.app.SDLActivity.7
         @Override // java.lang.Runnable
         public void run() {
@@ -951,7 +950,6 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
         }
         if (mBrokenLibraries) {
             mSingleton = this;
-            backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
             AlertDialog.Builder builder = new AlertDialog.Builder(this);
             builder.setMessage("An error occurred while trying to start the application. Please try again and/or reinstall." + System.getProperty("line.separator") + System.getProperty("line.separator") + "Error: " + message);
             builder.setTitle("SDL Error");
@@ -968,7 +966,6 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
         SDL.setupJNI();
         SDL.initialize();
         mSingleton = this;
-        backInvokedCallback = DoubleBackExit.registerPredictiveBack(this, this::exitFromBack);
         SDL.setContext(this);
         mClipboardHandler = new SDLClipboardHandler();
         mHIDDeviceManager = HIDDeviceManager.acquire(this);
@@ -997,7 +994,6 @@ return getContext().getApplicationInfo().nativeLibraryDir + "/" + (libraries.len
     @Override // i.AbstractActivityC1223l, androidx.fragment.app.B, android.app.Activity
     public void onDestroy() {
         Log.v(TAG, "onDestroy()");
-        DoubleBackExit.unregisterPredictiveBack(this, backInvokedCallback);
         DoubleBackExit.clear(this);
         HIDDeviceManager hIDDeviceManager = mHIDDeviceManager;
         if (hIDDeviceManager != null) {

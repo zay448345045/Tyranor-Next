@@ -1,0 +1,1448 @@
+# ============================================================
+# Tyranor Next - CodeRabbit Configuration
+# ============================================================
+#
+# 本配置用于 Tyranor Next 的 Pull Request 自动代码审核。
+#
+# 项目级审核依据：
+#
+#   1. AGENT.md
+#   2. CONTRIBUTING.md
+#
+# CodeRabbit 必须结合上述文件以及实际代码上下文进行审核。
+#
+# 注意：
+# CodeRabbit 属于静态代码审核 Agent。
+# CodeRabbit Review 不等于：
+#
+#   - Gradle 构建测试
+#   - Android CLI 测试
+#   - Android 实机测试
+#   - 游戏实际运行测试
+#   - 引擎兼容性实测
+#
+# 不得因为静态审核通过就声称运行时测试已经通过。
+# ============================================================
+
+language: "zh-CN"
+
+early_access: false
+
+
+# ============================================================
+# Reviews
+# ============================================================
+
+reviews:
+
+  # ----------------------------------------------------------
+  # 审核风格
+  # ----------------------------------------------------------
+
+  # 使用严格审核模式。
+  #
+  # 对潜在 Bug、规范违规、回归风险主动提出问题，
+  # 而不是只进行表面代码风格检查。
+  profile: "assertive"
+
+
+  # ----------------------------------------------------------
+  # Request Changes
+  # ----------------------------------------------------------
+
+  # 当发现需要阻塞合并的问题时，
+  # 允许 CodeRabbit 提交 Request Changes。
+  request_changes_workflow: true
+
+
+  # ----------------------------------------------------------
+  # Review 输出
+  # ----------------------------------------------------------
+
+  # 输出 PR 高层摘要。
+  high_level_summary: true
+
+  # 显示 Review 状态。
+  review_status: true
+
+  # 不生成与技术审核无关的诗歌。
+  poem: false
+
+  # 展开 Walkthrough，方便查看具体修改范围。
+  collapse_walkthrough: false
+
+
+  # ==========================================================
+  # 自动审核
+  # ==========================================================
+
+  auto_review:
+
+    # PR 创建及后续更新后自动审核。
+    enabled: true
+
+    # Draft PR 也进行审核。
+    #
+    # Tyranor Next 使用 Agent / Vibe Coding 较多，
+    # 因此允许在开发阶段提前发现问题。
+    #
+    # Draft 阶段 Review 不代表最终审核通过。
+    drafts: true
+
+
+  # ==========================================================
+  # Pre-Merge Checks
+  # ==========================================================
+  #
+  # 合并前自动质量门禁。
+  #
+  # error:
+  #   应作为阻塞合并的问题处理。
+  #
+  # warning:
+  #   提醒维护者注意，但不作为硬性失败。
+  #
+  # ==========================================================
+
+  pre_merge_checks:
+
+    # --------------------------------------------------------
+    # PR Description
+    # --------------------------------------------------------
+
+    description:
+      mode: "error"
+
+
+    # --------------------------------------------------------
+    # PR Title
+    # --------------------------------------------------------
+
+    title:
+      mode: "warning"
+
+      requirements: |
+        PR 标题必须能够清楚描述本次修改的主要目的。
+
+        推荐采用 Conventional Commit 风格，例如：
+
+        feat: 添加游戏收藏功能
+        fix: 修复 SAF 路径转换异常
+        refactor: 重构引擎启动逻辑
+        perf: 优化游戏扫描性能
+        docs: 更新贡献指南
+        build: 更新 Gradle 配置
+        chore: 更新项目维护配置
+
+        避免无意义标题，例如：
+
+        update
+        fix
+        test
+        修改
+        修复一下
+        最终版
+        新版本
+        123
+
+        标题不需要非常长，
+        但必须能够让维护者快速判断 PR 的主要目的。
+
+
+  # ==========================================================
+  # Custom Pre-Merge Checks
+  # ==========================================================
+  #
+  # Tyranor Next 使用 5 个自定义质量门禁：
+  #
+  # 1. PR Test Results
+  # 2. Engine Compatibility Impact
+  # 3. Breaking Change Documentation
+  # 4. Engine Regression Testing
+  # 5. AGENT.md Compliance
+  #
+  # ==========================================================
+
+  custom_checks:
+
+    # --------------------------------------------------------
+    # 1. PR 测试结果
+    # --------------------------------------------------------
+
+    - name: "PR Test Results"
+
+      mode: "error"
+
+      instructions: |
+        每个包含实际代码修改的 Pull Request，
+        都必须在 PR 描述中明确说明测试情况。
+
+        测试说明应根据本次修改范围，
+        至少包含以下适用内容：
+
+        - 是否成功完成本地构建
+        - 是否执行相关功能测试
+        - 是否执行回归测试
+        - 是否进行 Android CLI 验证
+        - 是否进行 Android 实机验证
+        - 实际测试了哪些功能
+        - 实际测试了哪些设备或 Android 版本
+        - 哪些相关功能尚未测试
+        - 测试过程中是否发现已知问题
+
+        不接受只有以下模糊描述：
+
+        - 已测试
+        - 没问题
+        - 应该没问题
+        - 编译通过
+        - AI 已检查
+        - CodeRabbit 已审核
+        - 理论上可用
+        - 看起来没问题
+
+        “项目能够编译”只能证明构建阶段成功，
+        不能单独证明功能正确或不存在回归。
+
+        “CodeRabbit Review 通过”属于静态代码审核，
+        不能作为 Android 实机测试或游戏运行测试的证明。
+
+        如果 Pull Request 仅修改：
+
+        - README
+        - CONTRIBUTING
+        - AGENT 文档
+        - 注释
+        - 纯文档文件
+
+        且明确不改变任何运行逻辑，
+        可以在 PR 中说明：
+
+        “仅文档修改，无需运行时测试。”
+
+        如果 PR 修改了实际代码，
+        但 PR 描述中完全没有说明测试结果或测试范围，
+        此检查必须失败。
+
+
+    # --------------------------------------------------------
+    # 2. 引擎兼容性说明
+    # --------------------------------------------------------
+
+    - name: "Engine Compatibility Impact"
+
+      mode: "error"
+
+      instructions: |
+        如果 Pull Request 修改了下列任意区域：
+
+        - engine/**
+        - EngineLauncher
+        - NativePluginManager
+        - JNI
+        - Native 代码
+        - SDL2
+        - SDL3
+        - 游戏路径映射
+        - 引擎启动流程
+        - 引擎公共配置
+        - 存档路径公共逻辑
+        - 多引擎共享代码
+
+        则 Pull Request 描述必须明确说明兼容性影响。
+
+        至少需要说明：
+
+        1. 本次修改影响哪个引擎或公共运行时
+        2. 修改前存在什么问题
+        3. 修改后行为发生什么变化
+        4. 是否修改共享代码
+        5. 是否可能影响其它引擎
+        6. 实际验证了哪些引擎
+        7. 哪些引擎尚未验证
+        8. 是否存在已知兼容性风险
+
+        必须特别考虑以下运行环境：
+
+        - Kirikiri
+        - krkrsdl3
+        - ONScripter
+        - Artemis
+        - Tyrano
+        - SDL2
+        - SDL3
+        - JNI
+        - Native Plugin
+
+        即使 PR 标题或描述声称：
+
+        “仅修复 Kirikiri”
+
+        如果修改发生在多个引擎共用的启动、路径、
+        Native、SDL 或公共配置代码中，
+        仍必须分析其它引擎的回归风险。
+
+        不接受没有依据的：
+
+        “不会影响其它引擎。”
+
+        如果声称不存在影响，
+        应说明判断依据。
+
+        如果 PR 完全不涉及引擎或底层公共运行逻辑，
+        此检查可以通过。
+
+
+    # --------------------------------------------------------
+    # 3. Breaking Change
+    # --------------------------------------------------------
+
+    - name: "Breaking Change Documentation"
+
+      mode: "error"
+
+      instructions: |
+        检查本 Pull Request 是否存在 Breaking Change。
+
+        Breaking Change 包括但不限于：
+
+        - 删除现有公共 API
+        - 修改公共 API 参数
+        - 修改函数参数语义
+        - 修改公共 Compose 组件接口
+        - 修改公共类行为
+        - 修改 SharedPreferences key
+        - 修改 SharedPreferences 数据类型
+        - 修改持久化数据格式
+        - 修改已有默认值
+        - 修改游戏扫描识别规则
+        - 修改游戏类型判断规则
+        - 修改游戏目录结构假设
+        - 修改 SAF 路径映射规则
+        - 修改真实路径转换逻辑
+        - 修改存档目录
+        - 修改存档数据格式
+        - 修改 EngineLauncher 行为
+        - 修改 Intent Extra
+        - 修改 Activity 启动约定
+        - 修改 JNI 方法签名
+        - 修改 Native ABI/API
+        - 修改引擎启动参数
+        - 修改资源文件格式
+        - 修改配置文件格式
+        - 删除已有功能
+        - 修改现有功能默认行为
+        - 导致旧版本数据无法继续使用
+        - 导致旧版本设置失效
+        - 需要其它调用方同步修改才能正常运行
+
+        如果存在 Breaking Change，
+        Pull Request 描述必须明确说明：
+
+        - Breaking Change 是什么
+        - 为什么必须进行该修改
+        - 影响哪些功能
+        - 影响哪些模块
+        - 是否影响用户已有数据
+        - 是否影响用户已有设置
+        - 是否兼容旧版本
+        - 是否提供迁移方案
+        - 用户是否需要执行额外操作
+        - 开发者是否需要同步修改调用代码
+
+        如果 PR 中存在 Breaking Change，
+        但 PR 描述完全没有说明，
+        此检查必须失败。
+
+        如果经过实际 Diff 和调用关系分析确认不存在 Breaking Change，
+        此检查可以通过。
+
+
+    # --------------------------------------------------------
+    # 4. Engine Regression Testing
+    # --------------------------------------------------------
+
+    - name: "Engine Regression Testing"
+
+      mode: "error"
+
+      instructions: |
+        如果 Pull Request 修改以下任意区域：
+
+        - engine/**
+        - JNI
+        - Native C/C++
+        - SDL2
+        - SDL3
+        - EngineLauncher
+        - NativePluginManager
+        - 游戏路径映射
+        - SAF 到实际路径转换
+        - 引擎公共启动逻辑
+        - 存档路径公共逻辑
+        - 引擎参数公共逻辑
+        - 多引擎共用代码
+
+        则 PR 描述必须包含明确的回归测试说明。
+
+        回归测试至少应根据修改范围说明：
+
+        - 实际测试了哪些功能
+        - 实际测试了哪些引擎
+        - 使用什么测试方式
+        - 是否成功安装 APK
+        - 是否成功启动 App
+        - 是否成功识别相关游戏
+        - 是否能够启动相关游戏
+        - 游戏是否进入基本运行状态
+        - 是否验证设置项
+        - 是否验证存档功能
+        - 是否验证退出与重新启动
+        - 是否发现异常日志
+        - 是否发现兼容性问题
+        - 哪些场景尚未验证
+
+        对 engine/ 或 Native 修改：
+
+        以下内容不能单独作为回归测试通过依据：
+
+        “./gradlew assembleDebug 成功”
+
+        “编译没有报错”
+
+        “CodeRabbit 没有发现问题”
+
+        “AI Agent 判断没有问题”
+
+        “代码看起来正确”
+
+        编译检查属于构建验证，
+        CodeRabbit 属于静态代码审核，
+        都不能替代真实运行验证。
+
+        如果当前因为条件限制无法进行某些引擎测试，
+        PR 必须明确说明：
+
+        - 未测试内容
+        - 未测试原因
+        - 潜在风险
+
+        不允许隐瞒未测试状态。
+
+        如果修改了核心引擎或底层代码，
+        却完全没有任何回归测试说明，
+        此检查必须失败。
+
+        如果 PR 完全不涉及引擎或底层公共运行逻辑，
+        此检查可以通过。
+
+
+    # --------------------------------------------------------
+    # 5. AGENT.md Compliance
+    # --------------------------------------------------------
+
+    - name: "AGENT.md Compliance"
+
+      mode: "error"
+
+      instructions: |
+        检查本次 Pull Request 是否遵守仓库根目录 AGENT.md。
+
+        AGENT.md 是 Tyranor Next 的强制项目开发规范之一。
+
+        审核时必须实际参考当前分支中的最新 AGENT.md，
+        不得凭通用 Android / Kotlin 风格代替项目自己的规则。
+
+        特别关注 AGENT.md 中具有以下措辞的规则：
+
+        - 必须
+        - 禁止
+        - 统一
+        - 只能
+        - 不得
+        - 应使用
+        - 必须使用
+
+        这些属于项目强制约束。
+
+        明确违反上述强制规则的问题，
+        不应降级成普通 Suggestion。
+
+        至少检查：
+
+        - 页面顶部栏规范
+        - 状态栏处理
+        - TopBarIcon 使用
+        - drawable 图标要求
+        - 页面结构一致性
+        - 页面切换动画
+        - 统一圆角
+        - 弹窗样式
+        - Typography 限制
+        - AppSearchField 使用
+        - 搜索与输入框规则
+        - 全局主题色状态
+        - MaterialTheme primary 使用
+        - MiuixTheme primary 使用
+        - 是否硬编码主题色
+        - NavWhite 使用
+        - PageGrey 使用
+        - TextColor 使用
+        - surfaceContainer 等错误容器色依赖
+        - TyranorNextTheme 层级
+        - MiuixSettingsTheme 层级
+        - 公共组件复用
+        - 测试与审核要求
+
+        如果 PR 存在仍未解决的明确 AGENT.md 强制规范违规，
+        此检查必须失败。
+
+        如果只是非强制性的可选改进，
+        不应错误阻塞 PR。
+
+        对 AGENT.md 自身的修改：
+
+        不应使用修改前的旧规则机械判定新规则违规。
+
+        应检查：
+
+        - 是否降低现有质量标准
+        - 是否产生规则冲突
+        - 是否引入无法执行的要求
+        - 是否产生明显歧义
+        - 是否与项目当前实际架构严重矛盾
+
+
+  # ==========================================================
+  # Path Instructions
+  # ==========================================================
+  #
+  # CodeRabbit 官方支持 Path Instructions，
+  # 用于针对不同文件路径注入项目专用审核要求。
+  #
+  # ==========================================================
+
+  path_instructions:
+
+    # ========================================================
+    # 全仓库
+    # ========================================================
+
+    - path: "**/*"
+
+      instructions: |
+        本仓库为 Tyranor Next。
+
+        审核所有 Pull Request 时，
+        必须优先阅读和遵守仓库根目录：
+
+        - AGENT.md
+        - CONTRIBUTING.md
+
+        两个文件属于项目级审核依据。
+
+        AGENT.md：
+
+        定义 Tyranor Next 的：
+
+        - 技术实现规范
+        - UI 规范
+        - Compose 规范
+        - 主题规范
+        - 公共组件规范
+        - Agent 开发规范
+        - 测试与审核规范
+
+        CONTRIBUTING.md：
+
+        定义：
+
+        - Pull Request 要求
+        - Commit 要求
+        - UI 修改要求
+        - 引擎修改要求
+        - Bug 修复要求
+        - 合并要求
+
+        AGENT.md 中出现：
+
+        - 必须
+        - 禁止
+        - 统一
+        - 只能
+        - 不得
+
+        等明确措辞时，
+        应将其理解为项目强制要求，
+        而不是普通风格建议。
+
+        对明确违反 AGENT.md 强制规则的问题，
+        默认至少按 Major 级别理解。
+
+        如果违规可能造成：
+
+        - 崩溃
+        - 用户数据损坏
+        - 严重安全问题
+        - 核心功能失效
+        - 引擎无法运行
+        - 严重确定性回归
+
+        应按 Blocker 理解。
+
+
+        审核至少覆盖以下维度：
+
+
+        1. 代码逻辑
+
+        检查：
+
+        - 条件判断
+        - 状态流转
+        - 边界条件
+        - 默认值
+        - 错误分支
+        - 参数验证
+        - 返回值处理
+
+
+        2. 架构
+
+        检查：
+
+        - 模块职责
+        - 依赖关系
+        - 代码耦合
+        - 是否绕过已有架构
+        - 是否重复实现公共能力
+        - 是否创建不必要的新状态源
+        - 是否破坏公共接口
+
+
+        3. 健壮性
+
+        检查：
+
+        - null
+        - 空值
+        - 空集合
+        - 非法输入
+        - 文件不存在
+        - 文件损坏
+        - SAF 权限失效
+        - 网络异常
+        - IO 异常
+        - 生命周期
+        - 并发
+        - 资源释放
+        - 重复操作
+        - 极端输入
+
+
+        4. 回归风险
+
+        分析：
+
+        - 是否破坏已有功能
+        - 是否影响其它调用方
+        - 是否影响公共组件
+        - 是否影响其它游戏引擎
+        - 是否改变持久化行为
+        - 是否改变默认配置
+        - 是否改变路径
+        - 是否改变生命周期
+        - 是否改变已有用户数据解释方式
+
+
+        5. 代码规范
+
+        检查：
+
+        - AGENT.md
+        - CONTRIBUTING.md
+        - 命名
+        - 重复代码
+        - 无用代码
+        - 调试代码
+        - 无关 Diff
+        - 敏感信息
+        - 复杂逻辑注释
+
+
+        审核严重程度统一理解为：
+
+
+        Blocker
+
+        - 崩溃
+        - 用户数据损坏
+        - 严重安全问题
+        - 核心功能失效
+        - 核心引擎不可运行
+        - 确定性严重回归
+        - Native 内存破坏
+
+
+        Major
+
+        - 明确违反 AGENT.md 强制规范
+        - 明显逻辑错误
+        - 生命周期错误
+        - SAF / 文件处理错误
+        - 明显兼容性问题
+        - 高概率回归
+        - 公共架构错误
+        - 重要资源泄漏
+
+
+        Minor
+
+        - 局部代码质量问题
+        - 可维护性问题
+        - 非关键规范偏差
+        - 不影响功能正确性的实现问题
+
+
+        Suggestion
+
+        - 可选优化
+        - 不影响当前正确性的改进
+
+
+        Blocker 和 Major 应视为阻塞合并的问题。
+
+
+        审核应优先报告：
+
+        - 真实 Bug
+        - 明确规范违反
+        - 回归风险
+        - 健壮性问题
+        - 架构问题
+
+        避免产生大量：
+
+        - 纯个人代码风格偏好
+        - 没有实际收益的重构建议
+        - 与当前 PR 无关的问题
+        - 没有证据的假设性问题
+
+
+        重要：
+
+        不得因为代码能够编译就认为实现正确。
+
+        不得把 CodeRabbit 静态审核描述为：
+
+        - Android CLI 已通过
+        - Android 实机已通过
+        - 游戏实际运行已通过
+        - 引擎兼容性已验证
+
+
+    # ========================================================
+    # Android / Kotlin
+    # ========================================================
+
+    - path: "app/src/main/**/*.kt"
+
+      instructions: |
+        严格按照 AGENT.md 审核 Kotlin 与 Android 代码。
+
+        重点检查：
+
+        - Kotlin nullability
+        - Compose State
+        - remember
+        - mutableStateOf
+        - derivedStateOf
+        - 状态是否出现双重来源
+        - 状态是否可能不同步
+        - recomposition 是否正确
+        - Coroutine Scope
+        - 生命周期
+        - Activity 生命周期
+        - Context 泄漏
+        - 异步任务退出页面后继续操作
+        - 重复请求
+        - 重复点击
+        - 竞态条件
+        - IO 异常
+        - SAF 权限
+        - SharedPreferences
+        - 公共逻辑复用
+        - 调用方回归
+
+        如果修改公共组件或公共方法，
+        必须检查主要调用点的兼容性。
+
+
+    # ========================================================
+    # Java
+    # ========================================================
+
+    - path: "app/src/main/**/*.java"
+
+      instructions: |
+        审核 Java 与 Kotlin 之间的兼容性。
+
+        重点检查：
+
+        - nullability
+        - Java/Kotlin 类型转换
+        - Context 生命周期
+        - Activity 生命周期
+        - JNI 调用
+        - Exception
+        - 资源释放
+        - Thread
+        - Callback
+        - 是否破坏已有 Kotlin 调用方
+
+
+    # ========================================================
+    # UI / Compose
+    # ========================================================
+
+    - path: "app/src/main/java/**/ui/**/*.kt"
+
+      instructions: |
+        本路径必须严格执行 AGENT.md 中的 UI 统一规范。
+
+        请主动检查以下问题。
+
+
+        【顶部栏】
+
+        检查：
+
+        - 是否遵守项目统一顶部栏结构
+        - 是否错误使用 Material3 TopAppBar
+        - 是否错误使用 Scaffold 代替项目指定结构
+        - 是否擅自增加返回按钮
+        - 是否正确使用 statusBarsPadding
+        - 是否维持透明状态栏
+        - 标题高度是否符合规范
+        - 标题 padding 是否符合规范
+        - Typography 是否符合规范
+
+
+        【顶部栏按钮】
+
+        必须检查：
+
+        - 是否使用公共 TopBarIcon
+        - 是否自己使用 IconButton / Icon 拼装
+        - 是否错误使用 Icons.*
+        - 是否使用 drawable 资源
+        - tint 是否来自正确主题
+
+
+        【圆角】
+
+        AGENT.md 指定的：
+
+        - 卡片
+        - 列表项
+        - 功能项
+        - 弹窗
+
+        应使用统一 8dp 圆角。
+
+        如果新代码明显违反，
+        应报告规范问题。
+
+
+        【Typography】
+
+        页面正文只应使用项目规定的文字层级。
+
+        主动检查新增：
+
+        - bodySmall
+        - bodyLarge
+        - labelMedium
+        - labelLarge
+        - headlineMedium
+        - headlineSmall
+
+        等违反 AGENT.md 的 typography。
+
+        顶部栏 titleLarge 属于允许例外。
+
+
+        【搜索与输入】
+
+        检查：
+
+        - AppSearchField
+        - TextField
+        - OutlinedTextField
+        - Miuix SearchBar
+        - Miuix InputField
+
+        如果项目规则要求使用 AppSearchField，
+        不允许页面重新实现同类输入组件。
+
+
+        【公共组件】
+
+        检查新代码是否：
+
+        - 重复实现现有公共组件
+        - 复制已有 UI
+        - 创建不同样式顶部栏
+        - 绕过主题系统
+        - 绕过已有组件 API
+
+
+    # ========================================================
+    # Theme
+    # ========================================================
+
+    - path: "app/src/main/java/**/theme/**/*.kt"
+
+      instructions: |
+        主题系统属于高风险公共模块。
+
+        必须严格依据 AGENT.md 检查主题状态传播。
+
+        重点检查：
+
+        - AppThemeColors.primary 是否仍是唯一 primary 状态
+        - 是否新增第二套主题状态
+        - TyranorNextTheme 是否正确读取 AppThemeColors
+        - MiuixSettingsTheme 是否正确读取 AppThemeColors
+        - 是否错误移除 @NonSkippableComposable
+        - ensureLoaded 是否仍正确
+        - refresh 是否仍正确
+        - 色调轮盘改变后是否触发重组
+        - Material 页面是否能够同步变色
+        - Miuix 页面是否能够同步变色
+        - PageGrey 语义是否正确
+        - NavWhite 语义是否正确
+        - TextColor 语义是否正确
+        - 深浅模式是否正常
+        - 色调切换是否正常
+
+        可能造成：
+
+        “部分页面无法跟随主题变化”
+
+        的修改至少应视为 Major。
+
+
+    # ========================================================
+    # 全局颜色使用
+    # ========================================================
+
+    - path: "app/src/main/java/**/*.kt"
+
+      instructions: |
+        同时审核主题色与颜色使用。
+
+        主动检查新增：
+
+        - Color(0x...)
+        - #307DEF
+        - Blue40
+        - 固定品牌蓝
+        - 页面内硬编码主题色
+
+        Material 页面主题强调色应根据 AGENT.md
+        从 MaterialTheme.colorScheme.primary 获取。
+
+        Miuix 页面主题强调色应根据 AGENT.md
+        从 MiuixTheme.colorScheme.primary 获取。
+
+        对需要跟随色调切换的容器，
+        检查是否错误依赖：
+
+        - surface
+        - surfaceVariant
+        - surfaceContainer
+        - surfaceContainerHigh
+        - surfaceContainerLow
+
+        等不会正确跟随项目自定义色调状态的颜色。
+
+        项目规定使用：
+
+        - NavWhite
+        - PageGrey
+        - TextColor
+
+        的场景，应遵循 AGENT.md。
+
+        不要机械报告所有 Color 使用。
+
+        AGENT.md 明确允许的：
+
+        - error
+        - EngineType.coverColor()
+        - 语义色
+        - 特殊资源颜色
+
+        不应误报。
+
+
+    # ========================================================
+    # Common UI Components
+    # ========================================================
+
+    - path: "app/src/main/java/**/ui/common/**/*.kt"
+
+      instructions: |
+        该目录属于全局公共 UI 组件。
+
+        修改属于较高回归风险。
+
+        必须检查：
+
+        - API 参数兼容性
+        - 默认参数变化
+        - 主要调用方
+        - 尺寸变化
+        - padding 变化
+        - 点击区域变化
+        - tint 变化
+        - Accessibility
+        - Compose 重组
+        - 主题切换
+
+        如果修改：
+
+        - TopBarIcon
+        - AppSearchField
+
+        必须检查是否仍满足 AGENT.md 的固定行为。
+
+
+    # ========================================================
+    # Settings / Persistence
+    # ========================================================
+
+    - path: "app/src/main/java/**/settings/**/*.kt"
+
+      instructions: |
+        Settings 和持久化属于回归敏感区域。
+
+        重点检查：
+
+        - SharedPreferences key
+        - 数据类型
+        - 默认值
+        - 数据迁移
+        - 旧版本兼容
+        - 是否可能重置已有设置
+        - 写入后是否刷新状态
+        - Context 生命周期
+        - 主题状态
+        - 引擎配置
+
+        如果修改已有 key：
+
+        - 名称
+        - 类型
+        - 默认值
+        - 含义
+
+        必须分析旧版本升级兼容性。
+
+
+    # ========================================================
+    # Scanner
+    # ========================================================
+
+    - path: "app/src/main/java/**/*Scanner*.kt"
+
+      instructions: |
+        游戏扫描属于核心功能。
+
+        严格检查：
+
+        - SAF 权限失效
+        - DocumentFile null
+        - 文件不存在
+        - 目录不可读
+        - IOException
+        - SecurityException
+        - 非法目录结构
+        - 大目录性能
+        - 重复游戏
+        - 大小写
+        - 特殊文件名
+        - Unicode 路径
+        - 引擎误识别
+        - 错误识别
+        - 扫描异常是否中止整个流程
+        - 修改规则是否影响其它引擎
+
+        修改游戏识别条件时，
+        必须重点分析回归。
+
+
+    # ========================================================
+    # Save Management
+    # ========================================================
+
+    - path: "app/src/main/java/**/*Save*.kt"
+
+      instructions: |
+        存档及文件管理属于高风险用户数据代码。
+
+        必须检查：
+
+        - 是否可能删除用户游戏原文件
+        - 是否可能错误覆盖用户文件
+        - 源路径
+        - 目标路径
+        - 文件不存在
+        - 目录不存在
+        - 部分复制失败
+        - IO Stream 释放
+        - 路径穿越
+        - 错误目录
+        - 异常后的状态一致性
+        - 存档镜像设计是否仍安全
+
+        Tyranor Next 的设计原则是：
+
+        应避免破坏游戏原始文件。
+
+        任何可能导致用户数据丢失的问题，
+        应视为 Blocker。
+
+
+    # ========================================================
+    # Engine Launcher
+    # ========================================================
+
+    - path: "app/src/main/java/**/*EngineLauncher*.kt"
+
+      instructions: |
+        EngineLauncher 属于核心游戏启动链路。
+
+        修改必须分析对所有相关引擎的影响：
+
+        - Kirikiri
+        - krkrsdl3
+        - ONScripter
+        - Artemis
+        - Tyrano
+
+        检查：
+
+        - 引擎判断
+        - 路径映射
+        - SAF URI
+        - Intent
+        - Activity 启动
+        - Native library
+        - 缺失运行库
+        - 单游戏设置
+        - 全局设置
+        - 默认配置
+        - 错误处理
+
+        即使 PR 只声称修复单一引擎，
+        如果修改共享启动链路，
+        也必须检查其它引擎。
+
+
+    # ========================================================
+    # Engine Runtime
+    # ========================================================
+
+    - path: "engine/**/*"
+
+      instructions: |
+        engine/ 是 Tyranor Next 核心运行层。
+
+        使用最高严格度审核。
+
+        不得只审核代码风格。
+
+        必须重点考虑：
+
+        - Kirikiri
+        - krkrsdl3
+        - ONScripter
+        - Artemis
+        - Tyrano
+        - SDL2
+        - SDL3
+        - JNI
+        - Native Plugin
+        - Dynamic Library
+        - 游戏路径
+        - 存档路径
+        - 字体
+        - 资源
+        - 渲染
+        - 生命周期
+
+        重点检查：
+
+        - Native crash
+        - JNI 签名
+        - Java/Kotlin/native 生命周期
+        - null pointer
+        - dangling pointer
+        - use-after-free
+        - double free
+        - memory leak
+        - file descriptor leak
+        - buffer overflow
+        - array bounds
+        - length mismatch
+        - thread safety
+        - SDL 初始化
+        - SDL 释放
+        - Native library 加载顺序
+        - ABI
+        - arm64-v8a
+        - Unicode path
+        - error cleanup
+        - 其它游戏兼容性
+
+        对 engine/ 修改：
+
+        “能够编译”
+
+        绝不代表审核通过。
+
+        如果 CodeRabbit 无法证明运行时兼容性，
+        应明确要求：
+
+        - 实际运行验证
+        - 引擎回归测试
+
+        但不得声称 CodeRabbit 自己已经完成实机测试。
+
+
+    # ========================================================
+    # C++
+    # ========================================================
+
+    - path: "**/*.cpp"
+
+      instructions: |
+        严格审核 C++ / JNI / Native 健壮性。
+
+        重点检查：
+
+        - nullptr
+        - buffer bounds
+        - ownership
+        - lifetime
+        - use-after-free
+        - double free
+        - memory leak
+        - file descriptor leak
+        - unchecked return value
+        - undefined behavior
+        - integer overflow
+        - signed/unsigned conversion
+        - encoding
+        - JNI local reference
+        - JNI global reference
+        - Java exception state
+        - thread safety
+
+        潜在 native 崩溃或内存破坏，
+        应按 Blocker 或 Major 报告。
+
+
+    # ========================================================
+    # C
+    # ========================================================
+
+    - path: "**/*.c"
+
+      instructions: |
+        严格检查 C 代码：
+
+        - 内存安全
+        - 数组边界
+        - pointer
+        - malloc/free
+        - resource lifetime
+        - error path
+        - return value
+        - overflow
+        - thread safety
+
+        可能导致崩溃或内存破坏的问题不得作为普通 Suggestion。
+
+
+    # ========================================================
+    # Header
+    # ========================================================
+
+    - path: "**/*.h"
+
+      instructions: |
+        检查 Header / Native API 修改。
+
+        特别关注：
+
+        - API compatibility
+        - ABI compatibility
+        - struct layout
+        - function signature
+        - enum values
+        - constant values
+        - ownership contract
+        - 其它 native 调用方
+
+        修改公共头文件时，
+        必须分析其它 Native 模块是否需要同步调整。
+
+
+    # ========================================================
+    # Gradle
+    # ========================================================
+
+    - path: "**/*.gradle*"
+
+      instructions: |
+        审核 Gradle / Build 修改。
+
+        检查：
+
+        - 是否新增不必要依赖
+        - 是否新增不可信 Maven Repository
+        - 是否使用动态版本
+        - 是否改变 minSdk
+        - 是否改变 targetSdk
+        - 是否改变 compileSdk
+        - Kotlin 兼容性
+        - AGP 兼容性
+        - Gradle 兼容性
+        - Compose Compiler
+        - arm64-v8a
+        - Native 打包
+        - assets/nativeplugins
+        - packagingOptions
+        - ABI filters
+        - CI 与本地行为
+        - Credentials / Token
+
+        版本升级必须分析 breaking changes。
+
+        Gradle Sync 成功不能单独证明升级安全。
+
+
+    # ========================================================
+    # Android Manifest
+    # ========================================================
+
+    - path: "**/AndroidManifest.xml"
+
+      instructions: |
+        严格审核 AndroidManifest.xml 修改。
+
+        检查：
+
+        - 新增权限
+        - 不必要权限
+        - exported
+        - Intent Filter
+        - Activity 暴露
+        - Service 暴露
+        - Receiver 暴露
+        - Provider 暴露
+        - FileProvider
+        - 网络权限
+        - 存储权限
+        - SAF
+        - attack surface
+
+        新增敏感权限时，
+        PR 必须能够说明实际用途。
+
+
+    # ========================================================
+    # GitHub / CI
+    # ========================================================
+
+    - path: ".github/**/*"
+
+      instructions: |
+        审核 GitHub Actions 和仓库治理配置。
+
+        重点检查：
+
+        - permissions 是否过大
+        - secrets 泄露
+        - pull_request_target
+        - fork PR 安全
+        - 未受信代码执行
+        - 第三方 Action
+        - Action 是否固定可信版本
+        - 是否绕过测试
+        - 是否绕过 Review Gate
+        - 是否降低 main 分支保护
+        - 是否改变发布安全性
+
+
+    # ========================================================
+    # AGENT.md
+    # ========================================================
+
+    - path: "AGENT.md"
+
+      instructions: |
+        AGENT.md 是 Tyranor Next 的核心项目开发与审核规范。
+
+        修改本文件时重点检查：
+
+        - 是否降低已有强制要求
+        - 是否删除重要质量要求
+        - 是否删除健壮性审核
+        - 是否删除回归审核
+        - 是否删除多 Agent 审核要求
+        - 是否产生规则冲突
+        - 是否产生无法执行的要求
+        - 是否产生模糊措辞
+        - 是否与当前项目结构严重不一致
+
+        对 AGENT.md 自身的修改，
+        不要机械使用旧版 AGENT.md 判定新版一定违规。
+
+        应分析规范修改本身是否合理。
+
+
+    # ========================================================
+    # CONTRIBUTING.md
+    # ========================================================
+
+    - path: "CONTRIBUTING.md"
+
+      instructions: |
+        CONTRIBUTING.md 定义项目贡献与合并流程。
+
+        修改时检查：
+
+        - 是否与 AGENT.md 冲突
+        - 是否降低质量门槛
+        - 是否删除必要审核
+        - 是否删除必要测试
+        - 是否削弱引擎修改要求
+        - 是否出现流程歧义
+        - 是否出现章节编号问题
+        - 是否存在明显错误版本说明
+        - 是否把强制要求错误修改为可选建议
+
+
+# ============================================================
+# CodeRabbit Chat
+# ============================================================
+
+chat:
+
+  # 允许在 PR 中 @coderabbitai 后继续交互，
+  # 例如询问问题、要求重新分析或解释 Review。
+  auto_reply: true

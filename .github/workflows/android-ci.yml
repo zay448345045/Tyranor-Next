@@ -17,6 +17,8 @@ jobs:
     name: Assemble Debug
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      HIKARINAGI_CLIENT_ID: ${{ vars.HIKARINAGI_CLIENT_ID }}
 
     steps:
       - name: Checkout

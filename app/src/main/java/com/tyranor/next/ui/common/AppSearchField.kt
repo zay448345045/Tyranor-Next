@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.tyranor.next.R
 import com.tyranor.next.theme.MiuixSettingsTheme
@@ -31,6 +32,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * @param onSearch 键盘 IME 动作回调；即时过滤场景可不传（默认空实现）
  * @param leadingIcon 前导图标 drawable；null 用默认搜索图标，非搜索语义必须传对应图标
  * @param iconContentDescription 无障碍描述，跟随图标语义
+ * @param textStyle 输入文字样式；null 用 miuix 默认 `main`（17sp），需要其他字号可传（如弹窗场景传 `subtitle`）
  */
 @Composable
 fun AppSearchField(
@@ -40,6 +42,7 @@ fun AppSearchField(
     onSearch: () -> Unit = { },
     leadingIcon: Painter? = null,
     iconContentDescription: String = "Search",
+    textStyle: TextStyle? = null,
 ) {
     MiuixSettingsTheme {
         SearchBar(
@@ -48,6 +51,7 @@ fun AppSearchField(
                     query = query,
                     onQueryChange = onQueryChange,
                     onSearch = { onSearch() },
+                    textStyle = textStyle ?: MiuixTheme.textStyles.main,
                     expanded = false,
                     onExpandedChange = { },
                     leadingIcon = {

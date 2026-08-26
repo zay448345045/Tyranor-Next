@@ -27,12 +27,17 @@ internal class TyranoLocalHttpServer(
     tyranoHook: ByteArray?,
     private val injectBeforeBody: Boolean = false,
     scriptAppends: Map<String, ByteArray> = emptyMap(),
+    private val injectedHtml: String = "",
+    internalResources: Map<String, ByteArray> = emptyMap(),
 ) : Runnable {
     private val root: File
     private val asar: AsarArchive?
     private val tyranoHook: ByteArray
     private val asarRootPrefix: String
     private val scriptAppends: Map<String, ByteArray> = scriptAppends.mapKeys { it.key.lowercase(Locale.ROOT) }
+    private val internalResources: Map<String, ByteArray> = internalResources.mapKeys {
+        it.key.trimStart('/').lowercase(Locale.ROOT)
+    }
     private val serverSocket: ServerSocket
     private val thread: Thread
     @Volatile
@@ -65,7 +70,9 @@ internal class TyranoLocalHttpServer(
         tyranoHook: ByteArray?,
         injectBeforeBody: Boolean = false,
         scriptAppends: Map<String, ByteArray> = emptyMap(),
-    ) : this(root, null, tyranoHook, injectBeforeBody, scriptAppends)
+        injectedHtml: String = "",
+        internalResources: Map<String, ByteArray> = emptyMap(),
+    ) : this(root, null, tyranoHook, injectBeforeBody, scriptAppends, injectedHtml, internalResources)
 
     fun start() { thread.start() }
     val port: Int get() = serverSocket.localPort
@@ -119,6 +126,10 @@ internal class TyranoLocalHttpServer(
             uri = URLDecoder.decode(uri, StandardCharsets.UTF_8.name())
             if (uri == "/") uri = "/index.html"
             while (uri.startsWith("/")) uri = uri.substring(1)
+            internalResources[uri.lowercase(Locale.ROOT)]?.let { resource ->
+                sendBytes(socket, resource, uri, method.equals("HEAD", true))
+                return
+            }
             val resolved = resolveRequestedFile(uri)
             if (resolved == null || (resolved.file == null && resolved.data == null)) {
                 sendText(socket, 404, "Not Found", "not found: $uri")
@@ -242,18 +253,7 @@ internal class TyranoLocalHttpServer(
     }
 
     private fun sendInjectedIndex(socket: Socket, html: String?, headOnly: Boolean) {
-        var htmlText = html ?: ""
-        if (tyranoHook.isEmpty()) {
-            sendBytes(socket, htmlText.toByteArray(StandardCharsets.UTF_8), "index.html", headOnly)
-            return
-        }
-        val script = String(tyranoHook, StandardCharsets.UTF_8)
-        val injected = "\n<script type='text/javascript'>\n$script\n</script>\n"
-        val lower = htmlText.lowercase(Locale.ROOT)
-        val marker = if (injectBeforeBody) "</body>" else "</head>"
-        val pos = lower.indexOf(marker)
-        htmlText = if (pos >= 0) htmlText.substring(0, pos) + injected + htmlText.substring(pos) else injected + htmlText
-        val data = htmlText.toByteArray(StandardCharsets.UTF_8)
+        val data = buildInjectedHtml(html.orEmpty(), tyranoHook, injectedHtml, injectBeforeBody)
         Log.i(TAG, "served injected index bytes=${data.size} hook=${tyranoHook.size}")
         val out = BufferedOutputStream(socket.getOutputStream())
         out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: ${data.size}\r\nConnection: close\r\n\r\n").toByteArray(StandardCharsets.UTF_8))
@@ -411,4 +411,24 @@ internal class TyranoLocalHttpServer(
         if (n.endsWith(".txt")) return "text/plain; charset=utf-8"
         return "application/octet-stream"
     }
+}
+
+internal fun buildInjectedHtml(
+    html: String,
+    hook: ByteArray,
+    injectedHtml: String,
+    beforeBody: Boolean,
+): ByteArray {
+    if (hook.isEmpty() && injectedHtml.isBlank()) return html.toByteArray(StandardCharsets.UTF_8)
+    val script = String(hook, StandardCharsets.UTF_8)
+    val hookTag = if (script.isBlank()) "" else "\n<script type='text/javascript'>\n$script\n</script>\n"
+    val injected = hookTag + injectedHtml
+    val marker = if (beforeBody) "</body>" else "</head>"
+    val position = html.lowercase(Locale.ROOT).indexOf(marker)
+    val result = if (position >= 0) {
+        html.substring(0, position) + injected + html.substring(position)
+    } else {
+        injected + html
+    }
+    return result.toByteArray(StandardCharsets.UTF_8)
 }
