@@ -5,18 +5,26 @@ import android.util.Log
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.tyranor.next.scanner.CoverScrapeTaskManager
-import com.tyranor.next.scanner.EngineScanner
-import com.tyranor.next.scanner.ScanGame
-import com.tyranor.next.ui.pages.cleanupDeletedGame
+import com.tyranor.next.R
+import com.tyranor.next.core.cover.CoverScrapeTaskManager
+import com.tyranor.next.core.game.storage.GameLibraryRepository
+import com.tyranor.next.core.i18n.AppLocaleController
+import com.tyranor.next.core.game.scan.EngineScanner
+import com.tyranor.next.core.game.model.ScanGame
+import com.tyranor.next.core.game.storage.GameLibraryDao
+import com.tyranor.next.core.settings.AppSettingsStore
+import com.tyranor.next.ui.game.cleanupDeletedGame
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -28,6 +36,10 @@ data class MainLibraryUiState(
     val scanning: Boolean = false,
     val scrapeEventId: Long = 0L,
     val scrapeMessage: String? = null,
+    /** 已发布搜索结果的查询词；与页面当前查询词一致时结果才可用（迁移方案阶段 3）。 */
+    val searchQuery: String = "",
+    /** Room DAO 搜索结果（已按当前排序模式排序）；null 表示无可用的 DB 搜索结果。 */
+    val searchResults: List<ScanGame>? = null,
 )
 
 /**
@@ -43,6 +55,11 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
     private val _uiState = MutableStateFlow(MainLibraryUiState())
     val uiState: StateFlow<MainLibraryUiState> = _uiState.asStateFlow()
 
+    /** 搜索防抖任务；activeSearchQuery 记录最新请求词，过期结果按词校验后丢弃。 */
+    private var searchJob: Job? = null
+    @Volatile
+    private var activeSearchQuery: String = ""
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             for (command in commands) {
@@ -53,7 +70,12 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
                 } catch (throwable: Throwable) {
                     Log.e(TAG, "Library persistence command failed", throwable)
                 } finally {
-                    publishStorageSnapshot(command.revision, command.finishesScan)
+                    // 发布失败也不能杀死 FIFO 队列协程，否则后续所有命令（扫描/删除/搜索）全部停摆。
+                    try {
+                        publishStorageSnapshot(command.revision, command.finishesScan)
+                    } catch (throwable: Throwable) {
+                        Log.e(TAG, "Publish storage snapshot failed", throwable)
+                    }
                 }
             }
         }
@@ -61,6 +83,13 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             CoverScrapeTaskManager.gameUpdates.collect { updated ->
                 _uiState.update { MainLibraryStateReducer.replaceGame(it, updated) }
+            }
+        }
+        // 设置页删除扫描目录时会同步清理该目录下的持久游戏缓存；
+        // 主库订阅 core 层修订号，避免跨 Tab 常驻组合下游戏页仍显示旧游戏。
+        viewModelScope.launch {
+            EngineScanner.libraryRevision.drop(1).collect {
+                refreshFromStorage()
             }
         }
         // 刮削任务属于应用级长任务，即使 GameScreen 已离开组合，也要立即发布给首页与游戏页。
@@ -71,7 +100,12 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
                 handledEventId = task.eventId
                 val result = task.result
                 val message = if (result != null) {
-                    "批量刮削完成：更新 ${result.updatedCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}"
+                    AppLocaleController.wrap(appContext).getString(
+                        R.string.cover_scrape_done,
+                        result.updatedCount,
+                        result.skippedCount,
+                        result.failedCount,
+                    )
                 } else {
                     task.error
                 }
@@ -148,11 +182,11 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /** 返回 false 表示三个快捷启动槽位均已占用。 */
+    /** 返回 false 表示快捷启动槽位均已占用。 */
     fun toggleQuickLaunch(game: ScanGame): Boolean {
         val current = _uiState.value
         val shouldAdd = current.quickLaunch.none { it.uri == game.uri }
-        if (shouldAdd && current.quickLaunch.size >= 3) return false
+        if (shouldAdd && current.quickLaunch.size >= GameLibraryDao.MAX_QUICK_LAUNCH) return false
         val revision = stateRevision.incrementAndGet()
         _uiState.update { MainLibraryStateReducer.toggleQuickLaunch(it, game) }
         enqueuePersistence(revision) {
@@ -183,6 +217,24 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    /**
+     * 游戏页搜索（迁移方案阶段 3）：防抖后经 FIFO 队列走 Room DAO 查询（预计算排序键 +
+     * LIKE 转义，并与待落库写互斥保证一致性）。空词回退页面内存过滤路径。
+     */
+    fun onSearchQueryChanged(query: String) {
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            activeSearchQuery = ""
+            _uiState.update { it.copy(searchQuery = "", searchResults = null) }
+            return
+        }
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            activeSearchQuery = query
+            enqueuePersistence(revision = stateRevision.get()) { }
+        }
+    }
+
     private fun enqueuePersistence(
         revision: Long,
         finishesScan: Boolean = false,
@@ -191,14 +243,14 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
         check(commands.trySend(PersistenceCommand(revision, finishesScan, action)).isSuccess)
     }
 
-    private fun publishStorageSnapshot(commandRevision: Long, finishesScan: Boolean) {
+    private suspend fun publishStorageSnapshot(commandRevision: Long, finishesScan: Boolean) {
         val games = EngineScanner.loadGames(appContext)
         val byUri = games.associateBy { it.uri }
         val storedQuick = EngineScanner.loadQuickLaunch(appContext)
         val normalizedRecent = EngineScanner.updateRecentGames(appContext) { current ->
             current.mapNotNull { stored -> byUri[stored.uri]?.copy(openTime = stored.openTime) }
         }
-        val quick = storedQuick.mapNotNull { stored -> byUri[stored.uri] }.take(3)
+        val quick = storedQuick.mapNotNull { stored -> byUri[stored.uri] }.take(GameLibraryDao.MAX_QUICK_LAUNCH)
         if (quick != storedQuick) EngineScanner.saveQuickLaunch(appContext, quick)
 
         _uiState.update { current ->
@@ -216,6 +268,23 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
                 current
             }
         }
+
+        // 搜索激活时随每次发布刷新 DB 搜索结果（与待落库写互斥），重命名/封面更新后保持同步。
+        val searchQuery = activeSearchQuery
+        if (searchQuery.isNotBlank()) {
+            val results = GameLibraryRepository.searchGamesConsistent(
+                appContext,
+                searchQuery.trim(),
+                AppSettingsStore.getGameSort(appContext),
+            )
+            _uiState.update { current ->
+                if (activeSearchQuery == searchQuery) {
+                    current.copy(searchQuery = searchQuery, searchResults = results)
+                } else {
+                    current
+                }
+            }
+        }
     }
 
     private data class PersistenceCommand(
@@ -226,6 +295,7 @@ class MainLibraryViewModel(application: Application) : AndroidViewModel(applicat
 
     companion object {
         private const val TAG = "MainLibraryVM"
+        private const val SEARCH_DEBOUNCE_MS = 150L
     }
 }
 
@@ -238,6 +308,16 @@ internal fun mergeChangedGameFields(base: ScanGame, before: ScanGame, updated: S
     coverSource = if (updated.coverSource != before.coverSource) updated.coverSource else base.coverSource,
     vndbId = if (updated.vndbId != before.vndbId) updated.vndbId else base.vndbId,
     metadataTitle = if (updated.metadataTitle != before.metadataTitle) updated.metadataTitle else base.metadataTitle,
+    externalModuleAlias = if (updated.externalModuleAlias != before.externalModuleAlias) {
+        updated.externalModuleAlias
+    } else {
+        base.externalModuleAlias
+    },
+    detectedRenpyVersion = if (updated.detectedRenpyVersion != before.detectedRenpyVersion) {
+        updated.detectedRenpyVersion
+    } else {
+        base.detectedRenpyVersion
+    },
     launchFile = if (updated.launchFile != before.launchFile) updated.launchFile else base.launchFile,
     openTime = if (updated.openTime != before.openTime) updated.openTime else base.openTime,
 )

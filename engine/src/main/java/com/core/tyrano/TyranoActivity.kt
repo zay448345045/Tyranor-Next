@@ -44,7 +44,7 @@ import org.json.JSONObject
  * Tyrano WebView 宿主；资源服务与存档沙箱分别由独立组件负责。
  *
  * 本 Activity 隶属于 engine 模块，不依赖 app 层。用户偏好（UI 缩放、外网开关）
- * 直接读取共享的 yukihub_prefs，与 OnsSettings 同模式；确认对话框通过 Intent extras
+ * 直接读取共享的 tyranor_prefs（原 yukihub_prefs），与 OnsSettings 同模式；确认对话框通过 Intent extras
  * 传入的 Launcher 主题色在 engine 内复刻 LauncherDialogFactory 的视觉风格，保持统一。
  */
 class TyranoActivity : Activity() {
@@ -67,6 +67,29 @@ class TyranoActivity : Activity() {
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(wrapContextForUiScale(newBase) ?: newBase)
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleInstance 启动模式下切换游戏只走到这里：路径或行为相关 extras
+        // （独立存档目录、修改器开关等）变化时整体重建，让 onCreate 按 Intent 重新解析
+        val newDir = resolveGameDir(intent)
+        if (newDir.isNullOrBlank()) return // 无法解析的意图不接管当前游戏，保留原 Intent
+        val changed = newDir != gameDir || behaviorSignature(intent) != behaviorSignature(getIntent())
+        setIntent(intent)
+        if (changed && !isFinishing) {
+            Log.i(TAG, "onNewIntent relaunch with changed intent; recreate")
+            recreate()
+        }
+    }
+
+    /** 影响引擎行为的 Intent extras 摘要，用于判断单游戏重启是否需要重建。 */
+    private fun behaviorSignature(intent: Intent): String = listOf(
+        resolveGameDir(intent),
+        intent.getBooleanExtra(EXTRA_SCOPED_SAVE_DIR, false).toString(),
+        intent.getStringExtra(EXTRA_SCOPED_SAVE_ROOT),
+        intent.getBooleanExtra(EXTRA_RPG_MAKER_MOD_ENABLED, true).toString(),
+        intent.getStringExtra(EXTRA_RPG_MAKER_MOD_GAME_ID),
+    ).joinToString("\u0000")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,9 +159,30 @@ class TyranoActivity : Activity() {
             }
             // 触屏手柄（issue #35）：MV/MZ 共用 __touch_pad.js，拼接进 hook 注入，
             // 独立于修改器开关。手柄代码零引擎依赖，MV/MZ 的 Input 均读 keyCode。
+            // issue #30：游戏内可自定义按钮布局，逐游戏配置在此注入供 JS 读取。
+            val isRpgWebGame = webGameType == WebGameType.RPG_MV || webGameType == WebGameType.RPG_MZ
+            val touchPadConf = if (isRpgWebGame && rpgMakerModGameId.isNotBlank()) {
+                getSharedPreferences(EnginePrefs.GAME_OVERRIDES_PREFS, Context.MODE_PRIVATE)
+                    .getString(rpgMakerModGameId, null)?.let { raw ->
+                        runCatching { JSONObject(raw).optString(PER_GAME_TOUCH_PAD_KEY) }
+                            .getOrNull()?.takeIf { it.isNotBlank() }
+                    }
+            } else {
+                null
+            }
+            val touchPadConfigJs = touchPadConf?.takeIf { it.isNotBlank() }?.let {
+                "window.__touchPadConfig=$it;"
+            }.orEmpty()
+            val touchPadThemeJs = if (isRpgWebGame) {
+                val colors = EngineThemeColors.fromIntent(intent)
+                "window.__touchPadTheme={primary:'${cssColor(colors.primary)}',onPrimary:'${cssColor(colors.onPrimary)}'};"
+            } else {
+                ""
+            }
             val touchPad =
-                if (webGameType == WebGameType.RPG_MV || webGameType == WebGameType.RPG_MZ) {
-                    try { loadAsset(TOUCH_PAD_ASSET) } catch (_: Exception) { ByteArray(0) }
+                if (isRpgWebGame) {
+                    val pad = try { String(loadAsset(TOUCH_PAD_ASSET), Charsets.UTF_8) } catch (_: Exception) { "" }
+                    (touchPadThemeJs + "\n" + touchPadConfigJs + "\n" + pad).toByteArray(Charsets.UTF_8)
                 } else {
                     ByteArray(0)
                 }
@@ -205,6 +249,10 @@ class TyranoActivity : Activity() {
         when (webGameType) {
             WebGameType.RPG_MV, WebGameType.RPG_MZ -> {
                 browser.addJavascriptInterface(RpgMakerSaveBridge(saves), RPG_MAKER_SAVE_BRIDGE_NAME)
+                browser.addJavascriptInterface(
+                    TouchPadSaveBridge(rpgMakerModGameId),
+                    TOUCH_PAD_BRIDGE_NAME,
+                )
                 if (rpgMakerModEnabled) {
                     browser.addJavascriptInterface(
                         RpgMakerModBridge(rpgMakerModGameId),
@@ -227,6 +275,8 @@ class TyranoActivity : Activity() {
 
     private fun loadAsset(name: String): ByteArray = assets.open(name).buffered().use { it.readBytes() }
 
+    private fun cssColor(color: Int): String = String.format(Locale.US, "#%06X", color and 0xFFFFFF)
+
     /** 虚拟鼠标合成事件 API（懒加载缓存；见 assets/__tyranor_mouse.js）。 */
     private val mouseJs: String by lazy {
         runCatching { loadAsset(VIRTUAL_MOUSE_ASSET).toString(Charsets.UTF_8) }.getOrDefault("")
@@ -234,7 +284,6 @@ class TyranoActivity : Activity() {
 
     private fun buildRpgMakerModHtml(): String {
         val colors = EngineThemeColors.fromIntent(intent)
-        fun cssColor(color: Int): String = String.format(Locale.US, "#%06X", color and 0xFFFFFF)
         return """
             <style>:root{--tm-primary:${cssColor(colors.primary)};--tm-on-primary:${cssColor(colors.onPrimary)};}</style>
             <link rel="stylesheet" href="/__tyranor__/rpgmaker_mod.css">
@@ -345,9 +394,12 @@ class TyranoActivity : Activity() {
                 return super.onConsoleMessage(consoleMessage)
             }
         }
-        runCatching { android.webkit.WebView.setWebContentsDebuggingEnabled(true) }
+        // 仅 debug 构建开放 chrome://inspect 远程调试；release 保持关闭，避免任意 JS 注入面
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            runCatching { android.webkit.WebView.setWebContentsDebuggingEnabled(true) }
+        }
         browser.settings.apply {
-            userAgentString = "$userAgentString;tyranoplayer-android-1.0;yukihub-internal-tyrano"
+            userAgentString = "$userAgentString;tyranoplayer-android-1.0;tyranor-internal-tyrano"
             javaScriptEnabled = true
             allowContentAccess = false
             allowFileAccess = false
@@ -836,6 +888,72 @@ class TyranoActivity : Activity() {
         }
     }
 
+    /** 触屏手柄游戏内布局保存桥（issue #30）：按游戏持久化自定义布局与预设。 */
+    inner class TouchPadSaveBridge(private val gameId: String) {
+        private val preferences
+            get() = getSharedPreferences(EnginePrefs.GAME_OVERRIDES_PREFS, Context.MODE_PRIVATE)
+
+        // touch_pad_config / touch_pad_presets 键名在本文件与 app 侧 GameOverridePartitions
+        // 双处锚定（engine 不得反向依赖 app）：app 侧经 game_overrides 表 + prefs 镜像参与读写；
+        // 与 PerGameSettingsStore 的其它引擎字段共存于同一条 JSON 记录，必须整条读改写以保留他人字段。
+        // 已知限制：app 主线程的设置页写路径与本桥线程之间暂无跨层互斥，极端并发下存在丢更新窗口，
+        // 后续如需彻底收口应把该记录的全部读写收敛到单一同步入口。
+        private fun readField(key: String): String = try {
+            preferences.getString(gameId, null)?.let { raw ->
+                JSONObject(raw).optString(key)
+            }.orEmpty()
+        } catch (_: Throwable) {
+            ""
+        }
+
+        private fun updateRecord(mutate: (JSONObject) -> Unit) {
+            val existing = runCatching { preferences.getString(gameId, null)?.let { JSONObject(it) } }
+                .getOrNull() ?: JSONObject()
+            mutate(existing)
+            preferences.edit().putString(gameId, existing.toString()).apply()
+        }
+
+        @JavascriptInterface
+        fun getConfig(): String = readField(PER_GAME_TOUCH_PAD_KEY)
+
+        @JavascriptInterface
+        fun saveConfig(raw: String?) {
+            if (gameId.isBlank() || raw.isNullOrBlank()) return
+            try {
+                val input = JSONObject(raw)
+                updateRecord { record ->
+                    if (input.length() == 0) {
+                        record.remove(PER_GAME_TOUCH_PAD_KEY)
+                    } else {
+                        // 统一字符串形态落盘，与 PerGameSettingsStore.setStr 的包裹方式一致
+                        record.put(PER_GAME_TOUCH_PAD_KEY, input.toString())
+                    }
+                }
+            } catch (_: Throwable) {
+                // 保留现有配置
+            }
+        }
+
+        @JavascriptInterface
+        fun getPresets(): String = readField(PER_GAME_TOUCH_PAD_PRESETS_KEY)
+
+        @JavascriptInterface
+        fun savePresets(raw: String?) {
+            if (gameId.isBlank()) return
+            try {
+                updateRecord { record ->
+                    if (raw.isNullOrBlank() || JSONObject(raw).length() == 0) {
+                        record.remove(PER_GAME_TOUCH_PAD_PRESETS_KEY)
+                    } else {
+                        record.put(PER_GAME_TOUCH_PAD_PRESETS_KEY, JSONObject(raw).toString())
+                    }
+                }
+            } catch (_: Throwable) {
+                // 保留现有预设
+            }
+        }
+    }
+
     private enum class WebGameType(val intentValue: String) {
         TYRANO("Tyrano"),
         RPG_MV("RPG"),
@@ -861,12 +979,15 @@ class TyranoActivity : Activity() {
         private const val JS_BRIDGE_NAME = "appJsInterface"
         private const val RPG_MAKER_SAVE_BRIDGE_NAME = "saveDataManager"
         private const val RPG_MAKER_MOD_BRIDGE_NAME = "TyranorModNative"
+        private const val TOUCH_PAD_BRIDGE_NAME = "TyranorTouchPadNative"
         private const val RPG_MV_SAVE_EXTENSION = ".bin"
         private const val EXTRA_SCOPED_SAVE_DIR = "scopedSaveDir"
         private const val EXTRA_SCOPED_SAVE_ROOT = "scopedSaveRoot"
         private const val EXTRA_RPG_MAKER_MOD_ENABLED = "rpgMakerModEnabled"
         private const val EXTRA_RPG_MAKER_MOD_GAME_ID = "rpgMakerModGameId"
         private const val RPG_MAKER_MOD_PREFS = "tyranor_rpgmaker_mod_state"
+        private const val PER_GAME_TOUCH_PAD_KEY = "touch_pad_config"
+        private const val PER_GAME_TOUCH_PAD_PRESETS_KEY = "touch_pad_presets"
         private const val RPG_MAKER_MOD_CORE_ASSET = "__rpgmaker_mod_core.js"
         private const val RPG_MAKER_MOD_UI_ASSET = "__rpgmaker_mod_ui.js"
         private const val RPG_MAKER_MOD_CSS_ASSET = "__rpgmaker_mod.css"
@@ -910,7 +1031,7 @@ class TyranoActivity : Activity() {
         /**
          * 通过 SharedPreferences 持久化的用户偏好创建自定义 Configuration 的 Context。
          *
-         * 复刻 app 模块 UiScaleUtil.wrap 的语义：读取 yukihub_prefs 中的字体缩放与全局
+         * 复刻 app 模块 UiScaleUtil.wrap 的语义：读取 tyranor_prefs 中的字体缩放与全局
          * UI 缩放，应用到 Configuration 后返回新的 Context。engine 不依赖 app 的工具类，
          * 此处保留独立的等价实现以避免反向依赖。
          */

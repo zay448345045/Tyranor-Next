@@ -1,3 +1,6 @@
+import org.gradle.api.file.DuplicatesStrategy
+import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.bundling.Zip
 import java.util.Properties
 
@@ -5,6 +8,7 @@ plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.ksp)
 }
 
 val localProperties = Properties().apply {
@@ -16,14 +20,26 @@ val localProperties = Properties().apply {
 fun configValue(name: String): String =
     System.getenv(name)?.takeIf { it.isNotBlank() }
         ?: localProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() }
         ?: ""
 fun String.asBuildConfigString(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-val nativePluginSourceDir = layout.projectDirectory.dir("src/main/nativeplugins")
+val appNativePluginSourceDir = layout.projectDirectory.dir("src/main/nativeplugins")
+val engineNativePluginSourceDir = rootProject.layout.projectDirectory.dir("engine/src/main/nativeplugins")
+val mergedNativePluginSourceDir = layout.buildDirectory.dir("generated/nativeplugin-sources")
 val bundledNativePluginAssetsDir = layout.buildDirectory.dir("generated/assets/nativeplugins")
 val bundledNativePluginEngineIds = listOf("kirikiroid2", "ons", "artemis")
+val engineAssetSourceDir = rootProject.layout.projectDirectory.dir("engine/src/main/assets")
+val sharedEngineAssetNames = listOf(
+    "__rmmz__.js",
+    "__hook_rmmz_core.js",
+    "__hook_rmmz_managers.js",
+    "__tyrano__.js",
+    "__rpg__.js",
+)
 val hikarinagiClientId = configValue("HIKARINAGI_CLIENT_ID")
+val tyranorApplicationId = configValue("TYRANOR_APPLICATION_ID").ifBlank { "com.tyranor.next" }
 val ciKeystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
 val ciKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
 val ciKeyAlias = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
@@ -35,11 +51,25 @@ val hasCiReleaseSigning = listOf(
     ciKeyPassword,
 ).all { !it.isNullOrBlank() }
 
+val syncBundledNativePluginSources by tasks.registering(Sync::class) {
+    group = "native plugins"
+    description = "Merges engine-owned native plugin binaries with app-owned plugin manifests."
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+    from(engineNativePluginSourceDir) {
+        exclude("**/.DS_Store")
+    }
+    from(appNativePluginSourceDir) {
+        exclude("**/.DS_Store")
+    }
+    into(mergedNativePluginSourceDir)
+}
+
 val bundledNativePluginZipTasks = bundledNativePluginEngineIds.map { engineId ->
     tasks.register<Zip>("package${engineId.replaceFirstChar { it.uppercase() }}NativePlugin") {
         group = "native plugins"
         description = "Packages the $engineId native engine plugin as a compressed asset."
-        from(nativePluginSourceDir.dir(engineId))
+        dependsOn(syncBundledNativePluginSources)
+        from(mergedNativePluginSourceDir.map { it.dir(engineId) })
         destinationDirectory.set(bundledNativePluginAssetsDir)
         archiveFileName.set("$engineId.zip")
         isPreserveFileTimestamps = false
@@ -53,6 +83,43 @@ val packageBundledNativePlugins by tasks.registering {
     dependsOn(bundledNativePluginZipTasks)
 }
 
+val syncSharedEngineAssets by tasks.registering(Sync::class) {
+    group = "native plugins"
+    description = "Copies shared engine-owned scripts into the app asset tree."
+    from(engineAssetSourceDir) {
+        include(sharedEngineAssetNames)
+        includeEmptyDirs = false
+    }
+    // 必须落在独立子目录：Sync 会清空目标目录下所有“非本次拷贝”的文件，
+    // 若与 packageXNativePlugin 的输出（generated/assets/nativeplugins）共享父目录，
+    // 一旦执行顺序为 zip → sync → mergeAssets，插件 zip 会被整目录抹掉，
+    // 产出缺失运行库的 APK（beta-1.21 事故根因，顺序无保证故本地难复现）。
+    into(layout.buildDirectory.dir("generated/assets/engine"))
+}
+
+val checkHardcodedUiStrings by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Checks localized string resource parity and blocks visible CJK string literals in Kotlin UI/core code."
+    // Keep the verification task usable on both developer Windows machines and
+    // Unix CI hosts: Python is commonly exposed as `python` on Windows and
+    // `python3` elsewhere.
+    val isWindows = System.getProperty("os.name").contains("Windows", ignoreCase = true)
+    val pythonCommand = if (isWindows) {
+        "python"
+    } else {
+        "python3"
+    }
+    val checkerScript = rootProject.layout.projectDirectory.file("tools/check-hardcoded-ui-strings.py").asFile.absolutePath
+    if (isWindows) {
+        // Launch through cmd.exe: Windows Python shims can reject a direct
+        // CreateProcess call from an elevated Gradle process even though the
+        // same interpreter is available from the shell.
+        commandLine("cmd.exe", "/c", pythonCommand, checkerScript)
+    } else {
+        commandLine(pythonCommand, checkerScript)
+    }
+}
+
 android {
     namespace = "com.tyranor.next"
     // miuix 0.9.2 传递依赖要求 compileSdk 37（本地平台为 android-37.0）
@@ -62,11 +129,11 @@ android {
         }
     }
     defaultConfig {
-        applicationId = "com.tyranor.next"
+        applicationId = tyranorApplicationId
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.20"
+        versionCode = 2
+        versionName = "1.31"
         buildConfigField("String", "HIKARINAGI_CLIENT_ID", hikarinagiClientId.asBuildConfigString())
     }
 
@@ -114,7 +181,9 @@ android {
     // 引擎原生插件先压缩为 assets/nativeplugins/<engine>.zip，首次启动自动安装到 app 私有目录
     sourceSets {
       getByName("main") {
-        assets.setSrcDirs(listOf("src/main/assets", "build/generated/assets"))
+        assets.directories.clear()
+        assets.directories.add("src/main/assets")
+        assets.directories.add("build/generated/assets")
       }
     }
 }
@@ -124,6 +193,11 @@ tasks.matching {
         it.name.contains("Lint", ignoreCase = true)
 }.configureEach {
     dependsOn(packageBundledNativePlugins)
+    dependsOn(syncSharedEngineAssets)
+}
+
+tasks.named("check") {
+    dependsOn(checkHardcodedUiStrings)
 }
 
 kotlin {
@@ -145,6 +219,10 @@ dependencies {
   // Arch Components
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
+  // 游戏库持久化（Room）：games/scan_roots/quick_launch 表，见 core/game/storage
+  implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.room.ktx)
+  ksp(libs.androidx.room.compiler)
 
   // Compose
   implementation(libs.androidx.compose.ui)
@@ -160,6 +238,7 @@ dependencies {
   // Local tests: jUnit, coroutines, Android runner
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation(libs.json)
 
   // Instrumented tests: jUnit rules and runners
   androidTestImplementation(libs.androidx.test.core)
@@ -172,6 +251,7 @@ dependencies {
   implementation(libs.androidx.navigation3.runtime)
   implementation(libs.androidx.lifecycle.viewmodel.navigation3)
   implementation(libs.androidx.documentfile)
+  implementation(libs.androidx.exifinterface)
   implementation(libs.appauth)
 
   // Miuix 组件库（设置页 Card + Preference 体系）

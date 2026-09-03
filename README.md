@@ -4,9 +4,11 @@
   <img src="screenshots/index.png" alt="Tyranor Next" width="850" />
 </p>
 
-基于 **Tyranor 模拟器逆向重写**的多引擎视觉小说（Galgame）聚合启动器，面向 Android 平台。内置 Kirikiri / ONScripter / Tyrano / Artemis 四套引擎运行环境，可识别和启动八类游戏，提供游戏库管理、封面获取、存档镜像、引擎参数调节等一体化体验。
+基于 **Tyranor 模拟器逆向重写**的多引擎视觉小说（Galgame）聚合启动器，面向 Android 平台。内置 Kirikiri / ONScripter / Tyrano / Artemis 四套引擎运行环境，并支持 Ren'Py、RPG Maker RGSS 外置 APK 引擎模块，可识别和启动多类游戏，提供游戏库管理、封面获取、存档镜像、引擎参数调节等一体化体验。
 
 主打轻便、简单、快捷，不引入其他冗余功能的简约设计思路
+
+企鹅群：364439133
 
 ## 支持范围
 
@@ -18,12 +20,18 @@
 | ONScripter | `nscript.dat`、`.nsa` | ONScripter 原生运行时 |
 | Artemis | `system.ini`、`.pfs` | Artemis 原生运行时 |
 | TyranoBuilder | `index.html`、`tyrano/` | 内置 Tyrano Web 运行环境 |
+| RPG Maker XP | `.rgssad`、`Game.ini` + `Data/*.rxdata` | 外置 RPGM APK 模块 |
+| RPG Maker VX | `.rgss2a`、`Game.ini` + `Data/*.rvdata` | 外置 RPGM APK 模块 |
+| RPG Maker VX Ace | `.rgss3a`、`Game.ini` + `Data/*.rvdata2` | 外置 RPGM APK 模块 |
+| mkxp-z | 用户选择/内部别名 `internal.mkxp-z` | 外置 RPGM APK 模块 |
 | RPG Maker MV | `www/`、`js/rpg_core.js` | 内置 Web 运行环境 |
 | RPG Maker MZ | `www/`、`js/rmmz_core.js` | 内置 Web 运行环境 |
 | VN | `globalData.vndata` | 内置 Web 运行环境 |
 | WebOther | 通用 `index.html` 网页游戏 | 内置 Web 运行环境 |
+| Ren'Py | `.rpa`、`game/script.rpy`、`game/options.rpy`、`renpy/` + `.rpy/.rpyc` | 外置 RenPy APK 模块 |
 
 内置 Web 运行环境同时支持部分以 `app.asar` 打包的 NW.js 游戏；启动时会根据归档内容进一步识别具体类型。
+Ren'Py 与 RPG Maker XP/VX/VX Ace/mkxp-z 当前通过外置 APK 模块运行：Ren'Py 支持 8.5 / 7.7.1 版本，可在全局或单游戏设置中选择引擎版本；自动模式会读取 Ren'Py `script_version` 与 Python2 运行库特征，在 8.5 / 7.7.1 模块间匹配。主 App 默认启用该能力，仅在引擎页检查目标模块是否已安装；未安装时引擎 item 显示打叉并提示下载安装。RPG Maker MV/MZ 属于 Web runtime，继续使用内置 Web 运行环境。
 
 ### 平台与文件要求
 
@@ -48,8 +56,46 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `app` | 启动器 UI：游戏扫描/管理、封面、存档、设置入口（Kotlin + Jetpack Compose） |
-| `engine` | 引擎运行时核心：SDL2/SDL3、Kirikiri TVP、krkrsdl3、ONScripter、Artemis、Tyrano 执行环境 |
+| `app` | Android 应用壳：Compose UI、功能抽象层、配置、封面、存档、授权、后台更新等应用侧能力 |
+| `engine` | 底层引擎运行时核心：SDL2/SDL3、Kirikiri TVP、krkrsdl3、ONScripter、Artemis、Tyrano、Native/JNI 与引擎宿主 Activity |
+
+### 三层目录架构
+
+当前项目按职责归类为三层，依赖方向固定为：
+
+```
+界面 UI 交互层 -> 功能抽象层 -> 底层引擎层
+```
+
+| 层级 | 目录 | 职责 |
+| --- | --- | --- |
+| 底层引擎层 | `engine/` | KRKR/Kirikiroid、krkrsdl3、ONS、Artemis、Tyrano、SDL/Cocos/IJK、Native/JNI、引擎宿主 Activity、引擎资源与 Native 插件底层加载 |
+| 功能抽象层 | `app/src/main/java/com/tyranor/next/core/` | 游戏扫描、游戏模型、启动编排、封面抓取、存档管理、在线补丁、应用/引擎/单游戏配置、授权、后台更新 |
+| 界面 UI 交互层 | `app/src/main/java/com/tyranor/next/ui/` | Compose 页面、Activity 壳、弹窗、导航、顶部栏、搜索框、用户输入、加载态与错误态 |
+
+功能抽象层按领域继续拆分：
+
+- `core/game`：游戏模型、扫描、启动、存档管理
+- `core/engine`：引擎类型、内置引擎插件启动与安装编排、外置 APK 引擎模块注册与启动协议
+- `core/cover`：封面抓取、来源聚合、批量任务
+- `core/patch`：KRKR 在线补丁
+- `core/settings`：应用级配置、引擎级配置、单游戏配置
+- `core/auth`：Hikarinagi OAuth 授权与 token 管理
+- `core/updater`：后台更新检查与通知
+- `core/unpack`：引擎相关封包解包辅助
+
+UI 层按页面域继续拆分：
+
+- `ui/main`：主入口、底部导航与全局页面状态
+- `ui/home`：首页
+- `ui/game`：游戏库、游戏卡片、封面操作、游戏动作弹窗
+- `ui/engine`：引擎页
+- `ui/settings`：应用设置、引擎设置入口、引擎/单游戏设置页面
+- `ui/cover`：封面来源与批量抓取设置
+- `ui/patch`：KRKR 在线补丁页面
+- `ui/save`：存档管理页面
+- `ui/auth`：OAuth 回调 Activity
+- `ui/common`：公共 UI 组件、弹窗、占位页、顶部栏/输入框等复用组件
 
 ### 技术栈
 
@@ -63,7 +109,10 @@
 ### 引擎集成设计
 
 - 引擎原生插件（`kirikiroid2` / `ons` / `artemis` 的 `.so`）以 assets 形式随 APK 打包（`nativeplugins/`），首次启动由 `NativePluginManager` 自动解压安装到应用私有目录
-- `app` 模块通过 `EngineLauncher` 将扫描结果映射到对应引擎 Activity 启动（SAF URI → 真实路径转换）
+- 共享 Native 插件 `.so` 的源头位于 `engine/src/main/nativeplugins`；app 侧仅维护插件 `manifest.json` 和 app-only 插件。构建时由 Gradle 合并生成 `app/build/generated/assets/nativeplugins/*.zip`
+- 共享 RPG Maker 注入脚本源头位于 `engine/src/main/assets`；app 侧只保留应用专属注入脚本，构建时由 Gradle 同步生成到 app assets，避免两边手工维护重复文件
+- `app` 模块通过 `core/game/launch/EngineLauncher` 将扫描结果映射到对应引擎 Activity 启动（SAF URI → 真实路径转换）
+- Ren'Py、RPG Maker RGSS 等外置 APK 引擎模块由 `core/engine/external` 统一注册、检测安装状态并按 intent 协议拉起；主 App 不维护手动启用开关，模块安装即视为可用
 - Tyrano 运行环境内置本地 HTTP 服务器、Asar 归档解析与 JS 钩子脚本（`__tyrano__.js` 等），无需外部依赖即可运行网页式脚本游戏
 - 原生库仅提供 `arm64-v8a` 架构
 
@@ -79,9 +128,23 @@
 ## 目录结构
 
 ```
-app/    启动器（UI、游戏扫描、封面、存档、设置）
-engine/ 引擎运行时核心（SDL、Kirikiri、krkrsdl3、ONScripter、Artemis、Tyrano）
-docs/   设计文档
+app/
+├── src/main/java/com/tyranor/next/
+│   ├── core/      功能抽象层：扫描、启动、引擎模块、封面、存档、补丁、配置、授权、更新
+│   ├── ui/        界面 UI 交互层：主界面、游戏页、设置页、弹窗、公共组件
+│   └── theme/     Compose / Miuix 主题、色调、深浅色适配
+├── src/main/assets/
+│   ├── engine/        App 专属 Web 引擎注入脚本
+│   └── nativeplugins/ Gradle 构建期生成的 Native 插件 zip
+└── src/main/nativeplugins/ 插件 manifest 与 app-only 插件源头
+
+engine/
+├── src/main/java/          底层引擎宿主、桥接代码与运行时入口
+├── src/main/cpp/           Native/JNI、SDL、引擎运行时代码
+├── src/main/assets/        底层引擎资源与共享引擎脚本源头
+└── src/main/nativeplugins/ 共享 Native 插件 so 源头
+
+docs/   设计文档、逆向分析、功能计划与优化方案
 ```
 
 ## 许可证

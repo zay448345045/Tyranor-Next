@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
@@ -15,6 +16,7 @@ import com.tyranor.next.theme.MiuixSettingsTheme
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SearchBarDefaults
+import top.yukonga.miuix.kmp.theme.LocalContentColor
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -32,7 +34,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * @param onSearch 键盘 IME 动作回调；即时过滤场景可不传（默认空实现）
  * @param leadingIcon 前导图标 drawable；null 用默认搜索图标，非搜索语义必须传对应图标
  * @param iconContentDescription 无障碍描述，跟随图标语义
- * @param textStyle 输入文字样式；null 用 miuix 默认 `main`（17sp），需要其他字号可传（如弹窗场景传 `subtitle`）
+ * @param textStyle 输入文字样式；null 用 miuix 默认 `main`（17sp），需要其他字号可传（如弹窗场景传 `bodyMedium`）
  */
 @Composable
 fun AppSearchField(
@@ -41,11 +43,17 @@ fun AppSearchField(
     modifier: Modifier = Modifier,
     onSearch: () -> Unit = { },
     leadingIcon: Painter? = null,
-    iconContentDescription: String = "Search",
+    iconContentDescription: String? = null,
     textStyle: TextStyle? = null,
 ) {
+    val resolvedIconContentDescription = iconContentDescription
+        ?: androidx.compose.ui.res.stringResource(R.string.common_search_content_description)
     MiuixSettingsTheme {
-        SearchBar(
+        // miuix 无 controller 的 MiuixTheme 重载不提供 LocalContentColor（默认黑色），
+        // InputField 内部强制以 LocalContentColor.current 作为输入文字颜色，
+        // 此处显式提供主题 onBackground（深色=白色系 / 浅色=深灰），保证深浅色下文字正确。
+        CompositionLocalProvider(LocalContentColor provides MiuixTheme.colorScheme.onBackground) {
+            SearchBar(
             inputField = {
                 InputField(
                     query = query,
@@ -61,7 +69,7 @@ fun AppSearchField(
                                 .size(26.dp),
                             painter = leadingIcon ?: painterResource(R.drawable.ic_game_search),
                             tint = MiuixTheme.colorScheme.primary,
-                            contentDescription = iconContentDescription,
+                            contentDescription = resolvedIconContentDescription,
                         )
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -71,6 +79,7 @@ fun AppSearchField(
             onExpandedChange = { },
             modifier = modifier.fillMaxWidth(),
             content = { },
-        )
+            )
+        }
     }
 }

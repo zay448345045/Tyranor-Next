@@ -1,7 +1,7 @@
 package com.tyranor.next.ui.main
 
-import com.tyranor.next.scanner.EngineType
-import com.tyranor.next.scanner.ScanGame
+import com.tyranor.next.core.engine.EngineType
+import com.tyranor.next.core.game.model.ScanGame
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -82,6 +82,17 @@ class MainLibraryStateReducerTest {
         assertEquals("重命名", merged.title)
         assertEquals("file:///new.jpg", merged.coverUri)
         assertEquals("vndb", merged.coverSource)
+    }
+
+    @Test
+    fun mergeChangedFieldsKeepsExternalModuleAliasWhenUnchangedByUpdate() {
+        val before = first.copy(externalModuleAlias = "internal.rpgmxp")
+        val base = before.copy(coverUri = "file:///new.jpg")
+        val renamedFromOldSnapshot = before.copy(title = "重命名")
+
+        val merged = mergeChangedGameFields(base, before, renamedFromOldSnapshot)
+
+        assertEquals("internal.rpgmxp", merged.externalModuleAlias)
     }
 
     private fun game(id: String, title: String) = ScanGame(

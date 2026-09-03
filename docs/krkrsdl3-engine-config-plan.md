@@ -24,7 +24,7 @@ intent.putStringArrayListExtra("gameargs", args)
 
 当前 TyranorNext 组装位置：
 
-- `app/src/main/java/com/tyranor/next/scanner/EngineLauncher.kt`
+- `app/src/main/java/com/tyranor/next/core/game/launch/EngineLauncher.kt`
 - `buildKrkrsdl3Args(...)`
 
 当前 krkrsdl3 读取位置：
@@ -343,8 +343,8 @@ args.add("-drawthread=$threadCount")
 
 ## 当前代码参考
 
-- TyranorNext 启动参数组装：`app/src/main/java/com/tyranor/next/scanner/EngineLauncher.kt`
-- TyranorNext KR 设置存储：`app/src/main/java/com/tyranor/next/settings/EngineSettingsStore.kt`
+- TyranorNext 启动参数组装：`app/src/main/java/com/tyranor/next/core/game/launch/EngineLauncher.kt`
+- TyranorNext KR 设置存储：`app/src/main/java/com/tyranor/next/core/settings/EngineSettingsStore.kt`
 - TyranorNext krkrsdl3 Activity 壳：`engine/src/main/java/com/core/krkrsdl3/Krkrsdl3Activity.kt`
 - TyranorNext krkrsdl3 argv 读取：`engine/src/main/java/org/tvp/krkrsdl3/KRKRActivity.java`
 - krkrsdl3 argv/渲染器解析：`cpp/core/utils/TVPSettings.cpp`

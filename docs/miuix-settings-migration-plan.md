@@ -9,7 +9,7 @@
 
 ### 1.1 现有实现（改造前）
 
-文件：`app/src/main/java/com/example/tyranornext/ui/pages/SettingsScreen.kt`
+文件：`app/src/main/java/com/tyranor/next/ui/settings/SettingsScreen.kt`
 
 | 现有组件 | 作用 | 视觉 |
 |---|---|---|
