@@ -1,5 +1,6 @@
 package com.tyranor.next.core.game.launch
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -19,8 +20,10 @@ import com.akira.tyranoemu.remote.ArtemisActivityV5
 import com.akira.tyranoemu.remote.Kirikiroid126
 import com.akira.tyranoemu.remote.Kirikiroid134
 import com.akira.tyranoemu.remote.Kirikiroid139
+import com.core.engine.EngineSessionRegistry
 import com.core.engine.KrkrStartupDialogPolicy
 import com.core.krkrsdl3.Krkrsdl3Activity
+import com.core.rpgmaker.RpgMakerActivity
 import com.core.tyrano.TyranoActivity
 import com.tyranor.next.R
 import com.tyranor.next.core.engine.EngineType
@@ -35,8 +38,9 @@ import com.tyranor.next.core.game.storage.EngineDetectionRepository
 import com.tyranor.next.core.i18n.AppLocaleController
 import com.tyranor.next.core.settings.EngineSettingsStore
 import com.tyranor.next.core.settings.PerGameSettingsStore
+import com.tyranor.next.core.theme.ThemeColorPayload
+import com.tyranor.next.core.theme.ThemeColorPayloadStore
 import com.tyranor.next.core.unpack.ArtemisPfsUnpacker
-import com.tyranor.next.theme.AppThemeColors
 import com.yuri.onscripter.ONScripter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -248,7 +252,11 @@ object EngineLauncher {
             EngineScanner.isRemovableStoragePath(normalized)
     }
 
-    /** 构建引擎 Intent；path 为真实文件路径。 */
+    /** 构建引擎 Intent；path 为真实文件路径。
+     *  字体偏好契约：`default_font`（空串=引擎按所有权标记清理残留）与
+     *  `force_default_font`（false 写 "0"）**必须无条件注入**——引擎侧
+     *  applyFontPreferences 仅在 hasExtra 时执行写入/清理，缺省会让
+     *  引擎配置里的旧值永久残留（issue #74）。 */
     private fun buildIntent(
         context: Context,
         engine: EngineType,
@@ -332,16 +340,16 @@ object EngineLauncher {
             }
         }
         // 注入 App 统一主题色与深浅色：引擎壳自绘 UI（确认/输入弹窗按钮等）经
-        // EngineThemeColors.fromIntent / KrDialogStyle 读取，缺失时回落默认绿，
-        // 这里同时写 primaryColor（EngineThemeColors）与 themeColorPrimary（KrDialogStyle）两套 key。
-        val dark = AppThemeColors.isDark
-        intent.putExtra("darkMode", dark)
-        intent.putExtra("primaryColor", AppThemeColors.primaryArgb)
-        intent.putExtra("themeColorPrimary", AppThemeColors.primaryArgb)
-        intent.putExtra("themeColorOnPrimary", 0xFFFFFFFF.toInt())
-        intent.putExtra("themeColorCard", (if (dark) 0xFF1E1F1F else 0xFFFFFFFF).toInt())
-        intent.putExtra("themeColorText", (if (dark) 0xFFF0F0F0 else 0xFF14221B).toInt())
-        intent.putExtra("themeColorTextMuted", (if (dark) 0xFF9A9A9A else 0xFF82908A).toInt())
+        // EngineThemeColors.fromIntent / KrDialogStyle 读取，缺失时回落默认绿。
+        // 主题色来自 ui 层写入的纯数据快照（ThemeColorPayloadStore），core 不反向依赖 theme。
+        val theme = ThemeColorPayloadStore.current ?: ThemeColorPayload.DEFAULT
+        intent.putExtra("darkMode", theme.darkMode)
+        intent.putExtra("primaryColor", theme.primaryArgb)
+        intent.putExtra("themeColorPrimary", theme.primaryArgb)
+        intent.putExtra("themeColorOnPrimary", theme.onPrimaryArgb)
+        intent.putExtra("themeColorCard", theme.cardArgb)
+        intent.putExtra("themeColorText", theme.textArgb)
+        intent.putExtra("themeColorTextMuted", theme.mutedArgb)
         return intent
     }
 
@@ -440,9 +448,19 @@ object EngineLauncher {
                 EngineSettingsStore.KR_126 -> "1.2.6"
                 else -> "1.3.9"
             })
-            // 字体偏好
-            if (defaultFont.isNotEmpty()) putExtra("default_font", defaultFont)
-            if (forceFont) putExtra("force_default_font", true)
+            // 字体偏好：两个 extra 必须无条件注入。引擎侧 applyFontPreferences 仅在
+            // hasExtra 时执行写入/按所有权标记清理——若仅在非空/为真时注入，用户关闭
+            // 强制或清空字体后引擎 XML 里的旧值会永久残留（issue #74「换字体无法生效」
+            // 的根因：残留的 force_default_font=1 一直压住新设置的字体）。
+            putExtra("default_font", defaultFont)
+            putExtra("force_default_font", forceFont)
+            // Anime4K 画面超分（单游戏覆盖 > 全局；仅 kirikiri2 内核路径支持）
+            val anime4kMode = or(
+                PerGameSettingsStore.getStr(context, gid, PerGameSettingsStore.F_ANIME4K_MODE)
+                    ?.takeIf { it in EngineSettingsStore.ANIME4K_MODES },
+                EngineSettingsStore.getKrAnime4kMode(context),
+            )
+            putExtra(com.core.gl.Anime4kRuntime.EXTRA_MODE, anime4kMode)
             // 渲染/内存偏好 JSON：单游戏覆盖 与 全局 逐键合并
             // 注意：buildKrEnginePrefsJson 遍历的是全局键（kr_renderer 等），
             // 而单游戏覆盖以 PerGameSettingsStore.KR_FIELDS（renderer 等）存储，需做键名映射。
@@ -699,7 +717,7 @@ object EngineLauncher {
         }
 
     private fun buildWebIntent(context: Context, path: String, game: ScanGame): Intent {
-        // Tyrano 与 RPG Maker Web 共用 TyranoActivity，因此沿用同一组 WebView 宿主设置。
+        // Tyrano 与 RPG Maker Web 共用同一组 WebView 宿主设置。
         val scoped = PerGameSettingsStore.getBool(context, game.uri, "ty_scoped")
             ?: EngineSettingsStore.isTyranoScopedSaveDir(context)
         val rpgMakerModEnabled = effectiveRpgMakerModEnabled(
@@ -714,7 +732,30 @@ object EngineLauncher {
         } else {
             null
         }
-        return Intent(context, TyranoActivity::class.java).apply {
+        // v1/v2 由独立 rpgmaker 运行时（:rpgmaker 进程）承载；v0 与 MZ v1（占位版本）
+        // 沿用原 tyrano 宿主的 v0 链路，不传版本 extras，行为与历史版本完全一致。
+        // 版本/legacy 读取仅在 RPG 会话进行，Tyrano/VN/WebOther 启动路径零新增开销。
+        val rpgSession = game.engine == EngineType.RPG_MV || game.engine == EngineType.RPG_MZ
+        val rpgMakerVersion = if (rpgSession) effectiveRpgMakerVersion(context, game) else null
+        val rpgLegacyRenderer = if (rpgSession) {
+            PerGameSettingsStore.getBool(context, game.uri, PerGameSettingsStore.F_RPG_LEGACY_RENDERER)
+                ?: EngineSettingsStore.isRpgLegacyRenderer(context)
+        } else {
+            false
+        }
+        val useRpgMakerRuntime = when (game.engine) {
+            EngineType.RPG_MV -> rpgMakerVersion == EngineSettingsStore.RPG_MV_V1 ||
+                rpgMakerVersion == EngineSettingsStore.RPG_MV_V2
+            EngineType.RPG_MZ -> rpgMakerVersion == EngineSettingsStore.RPG_MZ_V2
+            else -> false
+        }
+        if (rpgSession) {
+            // 与宿主侧 resolveGameDir 同型归一：目录（游戏路径为文件时取其父目录）
+            val sessionGameDir = File(path).let { f -> (if (f.isFile) f.parentFile else f)?.absolutePath }
+            stopOppositeRpgHost(context, useRpgMakerRuntime, sessionGameDir)
+        }
+        val target = if (useRpgMakerRuntime) RpgMakerActivity::class.java else TyranoActivity::class.java
+        return Intent(context, target).apply {
             putExtra("path", path)
             putExtra("gamePath", path)
             putExtra("projectRoot", path)
@@ -735,6 +776,37 @@ object EngineLauncher {
             scopedSaveRoot?.let { putExtra("scopedSaveRoot", it) }
             putExtra("rpgMakerModEnabled", rpgMakerModEnabled)
             putExtra("rpgMakerModGameId", game.uri)
+            if (useRpgMakerRuntime) {
+                rpgMakerVersion?.let { putExtra("rpgMakerVersion", it) }
+                putExtra("rpgLegacyRenderer", rpgLegacyRenderer)
+            }
+        }
+    }
+
+    /**
+     * 仅当会话登记表显示另一宿主正运行【同一游戏】时才回收对方进程（PR review 意见：
+     * 按进程后缀终止会误杀后台无关的 Tyrano/RPG 会话并可能丢失未存档进度）。
+     * 会话登记由各宿主 onCreate/onDestroy 经 EngineSessionRegistry 维护（跨进程文件，
+     * 主进程读取始终为最新值）；getRunningAppProcesses 仅返回本应用（同 uid）进程。
+     */
+    private fun stopOppositeRpgHost(context: Context, targetIsRpgMaker: Boolean, sessionGameDir: String?) {
+        if (sessionGameDir.isNullOrBlank()) return
+        val oppositeHost = if (targetIsRpgMaker) EngineSessionRegistry.HOST_TYRANO else EngineSessionRegistry.HOST_RPGMAKER
+        val registered = EngineSessionRegistry.currentGame(context, oppositeHost) ?: return
+        val matches = try {
+            File(registered).canonicalPath == File(sessionGameDir).canonicalPath
+        } catch (_: Throwable) {
+            registered == sessionGameDir
+        }
+        if (!matches) return
+        val oppositeSuffix = if (targetIsRpgMaker) ":tyrano" else ":rpgmaker"
+        runCatching {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            am?.runningAppProcesses
+                ?.filter { it.processName.endsWith(oppositeSuffix) }
+                ?.forEach { processInfo ->
+                    runCatching { android.os.Process.killProcess(processInfo.pid) }
+                }
         }
     }
 
@@ -1177,3 +1249,21 @@ internal fun effectiveRpgMakerModEnabled(
     globalDefault: Boolean,
 ): Boolean = engine in setOf(EngineType.RPG_MV, EngineType.RPG_MZ) &&
     (perGameOverride ?: globalDefault)
+
+internal fun effectiveRpgMakerVersion(context: Context, game: ScanGame): String? = when (game.engine) {
+    EngineType.RPG_MV -> {
+        val raw = PerGameSettingsStore.getStr(context, game.uri, PerGameSettingsStore.F_RPG_MV_VERSION)
+        val override = raw?.trim()?.lowercase()?.let { v ->
+            if (v == EngineSettingsStore.RPG_MV_V0 || v == EngineSettingsStore.RPG_MV_V1 || v == EngineSettingsStore.RPG_MV_V2) v else null
+        }
+        override ?: EngineSettingsStore.getRpgMvEngineVersion(context)
+    }
+    EngineType.RPG_MZ -> {
+        val raw = PerGameSettingsStore.getStr(context, game.uri, PerGameSettingsStore.F_RPG_MZ_VERSION)
+        val override = raw?.trim()?.lowercase()?.let { v ->
+            if (v == EngineSettingsStore.RPG_MZ_V0 || v == EngineSettingsStore.RPG_MZ_V1 || v == EngineSettingsStore.RPG_MZ_V2) v else null
+        }
+        override ?: EngineSettingsStore.getRpgMzEngineVersion(context)
+    }
+    else -> null
+}

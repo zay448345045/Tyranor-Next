@@ -52,6 +52,7 @@ import com.tyranor.next.theme.NavWhite
 import com.tyranor.next.theme.PageGrey
 import com.tyranor.next.ui.common.AppAlertDialog
 import com.tyranor.next.ui.common.AppNavItem
+import com.tyranor.next.ui.common.AppTopBar
 import com.tyranor.next.ui.common.glassNavBottomInset
 import com.tyranor.next.ui.settings.artVersionOptions
 import android.widget.Toast
@@ -76,17 +77,7 @@ fun EngineScreen(modifier: Modifier = Modifier) {
     }
 
     Column(modifier.fillMaxSize()) {
-        // 顶部栏：页面背景色，标题居左
-        Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
-            Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Text(stringResource(R.string.nav_engine), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
-                }
-            }
-        }
+        AppTopBar(title = stringResource(R.string.nav_engine))
 
         // 引擎列表
         LazyColumn(
@@ -257,13 +248,19 @@ private fun builtinEntry(id: String, title: String): EngineDialogEntry =
 
 private val tyranorWebBuiltin = listOf(builtinEntry("tyranor-builtin", TYRANOR_BUILTIN_VERSION))
 
+/** RPG Maker MV/MZ 弹窗条目：内置网页壳 + TyranorNext 系列（0.1/0.2 合并显示）。 */
+private val rpgMakerWebBuiltin = listOf(
+    builtinEntry("tyranor-builtin", TYRANOR_BUILTIN_VERSION),
+    builtinEntry("tyranornext-01-02", "TyranorNext-0.1/0.2"),
+)
+
 /** 各内置引擎的「版本条目」弹窗内容（条目顺序即展示顺序）。 */
 private val builtinDialogEntries: Map<EngineType, List<EngineDialogEntry>> = mapOf(
     EngineType.TYRANO to tyranorWebBuiltin,
     EngineType.WEB_OTHER to tyranorWebBuiltin,
     EngineType.VN to tyranorWebBuiltin,
-    EngineType.RPG_MV to tyranorWebBuiltin,
-    EngineType.RPG_MZ to tyranorWebBuiltin,
+    EngineType.RPG_MV to rpgMakerWebBuiltin,
+    EngineType.RPG_MZ to rpgMakerWebBuiltin,
     EngineType.ONS to listOf(
         builtinEntry("ons-builtin", "ONScripter-0.7.6"),
     ),

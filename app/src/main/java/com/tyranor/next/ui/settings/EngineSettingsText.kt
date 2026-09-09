@@ -31,6 +31,18 @@ internal fun krPatchOverlayOptions(): List<Pair<String, String>> = listOf(
 )
 
 @Composable
+internal fun krAnime4kOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.ANIME4K_OFF to stringResource(R.string.engine_option_off),
+    EngineSettingsStore.ANIME4K_S to stringResource(R.string.engine_option_anime4k_fast),
+    EngineSettingsStore.ANIME4K_M to stringResource(R.string.engine_option_anime4k_balanced),
+    EngineSettingsStore.ANIME4K_L to stringResource(R.string.engine_option_anime4k_high),
+    EngineSettingsStore.ANIME4K_SOFT_S to stringResource(R.string.engine_option_anime4k_soft_fast),
+    EngineSettingsStore.ANIME4K_SOFT_M to stringResource(R.string.engine_option_anime4k_soft_balanced),
+    EngineSettingsStore.ANIME4K_SOFT_L to stringResource(R.string.engine_option_anime4k_soft_high),
+    EngineSettingsStore.ANIME4K_DEBLUR to stringResource(R.string.engine_option_anime4k_deblur),
+)
+
+@Composable
 internal fun krRendererOptions(): List<Pair<String, String>> = listOf(
     "default" to stringResource(R.string.engine_option_engine_default),
     EngineSettingsStore.RENDERER_SOFTWARE to stringResource(R.string.engine_option_software_renderer),
@@ -157,6 +169,9 @@ internal fun krKernelOptionsMap(): Map<String, String> = krKernelOptions().toMap
 internal fun krPatchOverlayOptionsMap(): Map<String, String> = krPatchOverlayOptions().toMap()
 
 @Composable
+internal fun krAnime4kOptionsMap(): Map<String, String> = krAnime4kOptions().toMap()
+
+@Composable
 internal fun krRendererOptionsMap(): Map<String, String> =
     krRendererOptions().filterNot { it.first == "default" }.toMap()
 
@@ -192,6 +207,26 @@ internal fun renpyVersionOptionsMap(): Map<String, String> = renpyVersionOptions
 
 @Composable
 internal fun artPatchOptionsMap(): Map<String, String> = artPatchOptions().toMap()
+
+@Composable
+internal fun rpgMvVersionOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.RPG_MV_V0 to stringResource(R.string.engine_option_rpg_mv_v0),
+    EngineSettingsStore.RPG_MV_V1 to stringResource(R.string.engine_option_rpg_mv_v1),
+    EngineSettingsStore.RPG_MV_V2 to stringResource(R.string.engine_option_rpg_mv_v2),
+)
+
+@Composable
+internal fun rpgMzVersionOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.RPG_MZ_V0 to stringResource(R.string.engine_option_rpg_mz_v0),
+    // RPG_MZ v1 为预留占位（TyranoActivity 对 MZ v1 仅回退 v0，不构建 overlay），本期不在选项中暴露以免误导
+    EngineSettingsStore.RPG_MZ_V2 to stringResource(R.string.engine_option_rpg_mz_v2),
+)
+
+@Composable
+internal fun rpgMvVersionOptionsMap(): Map<String, String> = rpgMvVersionOptions().toMap()
+
+@Composable
+internal fun rpgMzVersionOptionsMap(): Map<String, String> = rpgMzVersionOptions().toMap()
 
 @Composable
 internal fun artResolutionOptionsMap(): Map<String, String> = artResolutionOptions().toMap()

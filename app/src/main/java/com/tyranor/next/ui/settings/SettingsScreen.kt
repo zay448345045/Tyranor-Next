@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import com.tyranor.next.R
 import com.tyranor.next.core.game.launch.EngineLauncher
@@ -69,21 +70,30 @@ import com.tyranor.next.theme.AppThemeColors
 import com.tyranor.next.theme.MiuixSettingsTheme
 import com.tyranor.next.theme.NavWhite
 import com.tyranor.next.theme.PageGrey
+import com.tyranor.next.theme.TextColor
 import com.tyranor.next.ui.common.AppNavItem
 import com.tyranor.next.ui.common.AppAlertDialog
 import com.tyranor.next.ui.common.AppSearchField
+import com.tyranor.next.ui.common.AppTopBar
 import com.tyranor.next.ui.common.TopBarIcon
 import com.tyranor.next.ui.common.glassNavBottomInset
 import com.tyranor.next.core.updater.GitHubUpdateChecker
+import com.tyranor.next.core.updater.UpdateApkDownloader
+import com.tyranor.next.core.updater.UpdateCandidate
 import com.tyranor.next.core.updater.UpdateCheckResult
+import com.tyranor.next.core.updater.UpdateDownloadResult
 import com.tyranor.next.ui.cover.CoverScraperSettingsActivity
 import com.tyranor.next.ui.game.startActivityWithPageTransition
 import java.io.File
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
+import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.Scaffold as MiuixScaffold
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SliderDefaults
@@ -92,13 +102,36 @@ import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
+/** 更新弹窗的下载阶段；null 表示停留在"发现新版本"阶段，四个阶段复用同一个 AppAlertDialog。 */
+private sealed interface UpdateDownloadPhase {
+    data class Downloading(val downloadedBytes: Long, val totalBytes: Long) : UpdateDownloadPhase
+
+    data class Completed(val apkFile: File) : UpdateDownloadPhase
+
+    data class Failed(val message: String) : UpdateDownloadPhase
+}
+
+/** 更新下载进度文案的字节格式化（APK 体积通常在 MB 级）。 */
+private fun formatUpdateBytes(bytes: Long): String {
+    return if (bytes >= 1024L * 1024) {
+        String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    } else {
+        String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+    }
+}
+
 /** 设置页：只展示各引擎全局设置入口，具体设置内容由独立 Activity 承载。列表项采用 Miuix Card + Preference 体系。 */
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    // 已知行为：以下更新弹窗状态均为 remember 持有，Activity 重建（旋转/语言切换）会丢失并静默取消下载；
+    // 更新检查是低频操作，接受该取舍，未上 ViewModel 持久化。
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateAvailable by remember { mutableStateOf<UpdateCheckResult.UpdateAvailable?>(null) }
+    var activeCandidate by remember { mutableStateOf<UpdateCandidate?>(null) }
+    var updateDownloadPhase by remember { mutableStateOf<UpdateDownloadPhase?>(null) }
+    var updateDownloadJob by remember { mutableStateOf<Job?>(null) }
     var showGroupDialog by remember { mutableStateOf(false) }
     var showScanDirs by remember { mutableStateOf(false) }
     var scanDirs by remember { mutableStateOf(EngineScanner.loadRoots(ctx)) }
@@ -140,6 +173,77 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             }
             checkingUpdate = false
         }
+    }
+
+    fun closeUpdateDialog() {
+        // 约定：关闭弹窗即取消下载，并清理临时文件
+        updateDownloadJob?.cancel()
+        updateDownloadJob = null
+        updateDownloadPhase = null
+        activeCandidate = null
+        updateAvailable = null
+    }
+
+    fun startApkDownload(candidate: UpdateCandidate) {
+        // 防重入：下载进行中时忽略重复点击，避免并发两个下载
+        if (updateDownloadJob?.isActive == true) return
+        val asset = candidate.apkAsset ?: return
+        activeCandidate = candidate
+        updateDownloadPhase = UpdateDownloadPhase.Downloading(0L, asset.size)
+        var job: Job? = null
+        job = scope.launch {
+            try {
+                val result = UpdateApkDownloader.download(ctx, asset) { downloaded, total ->
+                    // 身份校验：仅当前任务可回写进度，防止取消/重试后旧协程污染状态
+                    if (updateDownloadJob === job) {
+                        updateDownloadPhase = UpdateDownloadPhase.Downloading(downloaded, total)
+                    }
+                }
+                if (updateDownloadJob === job) {
+                    when (result) {
+                        is UpdateDownloadResult.Success -> {
+                            updateDownloadPhase = UpdateDownloadPhase.Completed(result.apkFile)
+                        }
+                        is UpdateDownloadResult.Failed -> {
+                            updateDownloadPhase = UpdateDownloadPhase.Failed(result.message)
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                // 用户关闭弹窗即取消下载：状态由 closeUpdateDialog 复位，这里无需处理
+                throw cancelled
+            }
+        }
+        updateDownloadJob = job
+        // 兜底：无论正常结束、失败还是被取消，当前 job 完成后清引用，避免快速重试时孤儿下载
+        job.invokeOnCompletion { if (updateDownloadJob === job) updateDownloadJob = null }
+    }
+
+    val settingsUpdateInstallFailedMessage = stringResource(R.string.update_install_failed)
+    fun installUpdateApk(file: File) {
+        if (!ctx.packageManager.canRequestPackageInstalls()) {
+            // 未授权"安装未知应用"：先跳系统授权页，授权后用户再次点击安装即可
+            runCatching {
+                ctx.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${ctx.packageName}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+            return
+        }
+        // getUriForFile 可能因外置存储不可用且回退路径未在 file_paths 声明而抛异常，兜底提示
+        val uri = runCatching { FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file) }.getOrElse {
+            Toast.makeText(ctx, settingsUpdateInstallFailedMessage, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { ctx.startActivity(installIntent) }
+            .onFailure { Toast.makeText(ctx, settingsUpdateInstallFailedMessage, Toast.LENGTH_SHORT).show() }
     }
 
     MiuixSettingsTheme {
@@ -417,38 +521,136 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     }
 
     updateAvailable?.let { update ->
+        val downloadPhase = updateDownloadPhase
         AppAlertDialog(
-            onDismissRequest = { updateAvailable = null },
-            title = { Text(stringResource(R.string.update_found_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+            onDismissRequest = { closeUpdateDialog() },
+            title = {
+                Text(
+                    stringResource(
+                        when (downloadPhase) {
+                            is UpdateDownloadPhase.Failed -> R.string.update_download_failed_title
+                            is UpdateDownloadPhase.Completed -> R.string.update_download_completed_title
+                            else -> R.string.update_found_title
+                        },
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        stringResource(R.string.update_current_version, update.currentVersion),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MiuixTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        stringResource(R.string.update_latest_version, update.latestVersion),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MiuixTheme.colorScheme.onBackground,
-                    )
-                    Text(
-                        stringResource(R.string.update_open_github_message),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MiuixTheme.colorScheme.onBackground,
-                    )
+                when (downloadPhase) {
+                    null -> {
+                        // 统一条目组件列出最新三个版本，点击进入下载弹窗
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            update.candidates.forEach { candidate ->
+                                AppNavItem(
+                                    title = stringResource(R.string.update_version_item, candidate.latestVersion),
+                                    leadingIcon = R.drawable.ic_update_download,
+                                    containerColor = PageGrey,
+                                    onClick = {
+                                        if (candidate.apkAsset != null) {
+                                            startApkDownload(candidate)
+                                        } else {
+                                            // 无 APK 资产时回退浏览器打开该版本发布页
+                                            runCatching {
+                                                ctx.startActivity(
+                                                    Intent(Intent.ACTION_VIEW, Uri.parse(candidate.releaseUrl))
+                                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                                )
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                            // 跳转浏览器查看全部 Releases（外部跳转属执行动作，不显示右箭头）
+                            AppNavItem(
+                                title = stringResource(R.string.update_open_releases),
+                                leadingIcon = R.drawable.ic_update_github,
+                                containerColor = PageGrey,
+                                showArrow = false,
+                                onClick = {
+                                    runCatching {
+                                        ctx.startActivity(
+                                            Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse("https://github.com/Weiss-UltimateSavior/Tyranor-Next/releases"),
+                                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    is UpdateDownloadPhase.Downloading -> {
+                        val fraction = if (downloadPhase.totalBytes > 0) {
+                            (downloadPhase.downloadedBytes.toFloat() / downloadPhase.totalBytes).coerceIn(0f, 1f)
+                        } else {
+                            null
+                        }
+                        val percent = if (downloadPhase.totalBytes > 0) {
+                            ((downloadPhase.downloadedBytes * 100) / downloadPhase.totalBytes).toInt()
+                        } else {
+                            0
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // miuix 风格进度条：progress 为 null 时展示不定态
+                            LinearProgressIndicator(
+                                progress = fraction,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.update_downloading_status,
+                                    formatUpdateBytes(downloadPhase.downloadedBytes),
+                                    formatUpdateBytes(downloadPhase.totalBytes),
+                                    percent,
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextColor,
+                            )
+                        }
+                    }
+                    is UpdateDownloadPhase.Completed -> {
+                        Text(
+                            stringResource(R.string.update_download_completed_message, downloadPhase.apkFile.name),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextColor,
+                        )
+                    }
+                    is UpdateDownloadPhase.Failed -> {
+                        Text(
+                            downloadPhase.message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextColor,
+                        )
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { updateAvailable = null }) { Text(stringResource(R.string.common_cancel)) }
+                when (downloadPhase) {
+                    // 版本列表阶段：无次要按钮，点击条目即进入下载
+                    null -> Unit
+                    is UpdateDownloadPhase.Downloading -> Unit
+                    is UpdateDownloadPhase.Completed, is UpdateDownloadPhase.Failed -> {
+                        TextButton(onClick = { closeUpdateDialog() }) { Text(stringResource(R.string.common_cancel)) }
+                    }
+                }
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        updateAvailable = null
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
-                    },
-                ) { Text(stringResource(R.string.update_go_download)) }
+                when (downloadPhase) {
+                    null -> {
+                        TextButton(onClick = { closeUpdateDialog() }) { Text(stringResource(R.string.common_cancel)) }
+                    }
+                    is UpdateDownloadPhase.Downloading -> {
+                        TextButton(onClick = { closeUpdateDialog() }) { Text(stringResource(R.string.update_download_cancel)) }
+                    }
+                    is UpdateDownloadPhase.Completed -> {
+                        TextButton(onClick = { installUpdateApk(downloadPhase.apkFile) }) { Text(stringResource(R.string.update_install)) }
+                    }
+                    is UpdateDownloadPhase.Failed -> {
+                        TextButton(onClick = { activeCandidate?.let { startApkDownload(it) } }) { Text(stringResource(R.string.update_retry)) }
+                    }
+                }
             },
         )
     }
@@ -476,6 +678,7 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
     var krFps by remember { mutableStateOf(EngineSettingsStore.getKrFpsLimit(ctx)) }
     var krVCursorScale by remember { mutableStateOf(EngineSettingsStore.getKrVCursorScale(ctx)) }
     var krMenuOpa by remember { mutableStateOf(EngineSettingsStore.getKrMenuHandlerOpa(ctx)) }
+    var krAnime4k by remember { mutableStateOf(EngineSettingsStore.getKrAnime4kMode(ctx)) }
 
     var ons by remember { mutableStateOf(EngineSettingsStore.loadOns(ctx)) }
 
@@ -491,6 +694,9 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
     var tyExternal by remember { mutableStateOf(EngineSettingsStore.isTyranoExternalNetwork(ctx)) }
     var tyScoped by remember { mutableStateOf(EngineSettingsStore.isTyranoScopedSaveDir(ctx)) }
     var rpgMakerMod by remember { mutableStateOf(EngineSettingsStore.isRpgMakerModEnabled(ctx)) }
+    var rpgLegacyRenderer by remember { mutableStateOf(EngineSettingsStore.isRpgLegacyRenderer(ctx)) }
+    var rpgMvVersion by remember { mutableStateOf(EngineSettingsStore.getRpgMvEngineVersion(ctx)) }
+    var rpgMzVersion by remember { mutableStateOf(EngineSettingsStore.getRpgMzEngineVersion(ctx)) }
     var renpyVersion by remember { mutableStateOf(EngineSettingsStore.getRenpyVersion(ctx)) }
 
     val fontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -524,6 +730,7 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
         EngineSettingsStore.setKrFpsLimit(ctx, krFps)
         EngineSettingsStore.setKrVCursorScale(ctx, krVCursorScale)
         EngineSettingsStore.setKrMenuHandlerOpa(ctx, krMenuOpa)
+        EngineSettingsStore.setKrAnime4kMode(ctx, krAnime4k)
         EngineSettingsStore.saveOns(ctx, ons)
         EngineSettingsStore.setArtEngineVersion(ctx, artVersion)
         EngineSettingsStore.setArtRotateScreen(ctx, artRotate)
@@ -536,6 +743,9 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
         EngineSettingsStore.setTyranoExternalNetwork(ctx, tyExternal)
         EngineSettingsStore.setTyranoScopedSaveDir(ctx, tyScoped)
         EngineSettingsStore.setRpgMakerModEnabled(ctx, rpgMakerMod)
+        EngineSettingsStore.setRpgLegacyRenderer(ctx, rpgLegacyRenderer)
+        EngineSettingsStore.setRpgMvEngineVersion(ctx, rpgMvVersion)
+        EngineSettingsStore.setRpgMzEngineVersion(ctx, rpgMzVersion)
         EngineSettingsStore.setRenpyVersion(ctx, renpyVersion)
     }
 
@@ -545,37 +755,26 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
             containerColor = MiuixTheme.colorScheme.background,
             contentWindowInsets = WindowInsets(0.dp),
             topBar = {
-                Column(modifier = Modifier.fillMaxWidth().background(MiuixTheme.colorScheme.background)) {
-                    Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                engineSettingsKindTitle(kind),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MiuixTheme.colorScheme.onBackground,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            TopBarIcon(painterResource(R.drawable.ic_save), stringResource(R.string.engine_settings_save_content_description), MiuixTheme.colorScheme.primary) {
-                                saveAll()
-                                android.widget.Toast.makeText(ctx, engineSettingsSavedMessage, android.widget.Toast.LENGTH_SHORT).show()
-                            }
+                AppTopBar(
+                    title = engineSettingsKindTitle(kind),
+                    background = MiuixTheme.colorScheme.background,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                    trailing = {
+                        TopBarIcon(painterResource(R.drawable.ic_save), stringResource(R.string.engine_settings_save_content_description), MiuixTheme.colorScheme.primary) {
+                            saveAll()
+                            android.widget.Toast.makeText(ctx, engineSettingsSavedMessage, android.widget.Toast.LENGTH_SHORT).show()
                         }
-                    }
-                }
+                    },
+                )
             },
         ) { innerPadding ->
             LazyListPlaceholder(
                 kind,
                 krVersion, krKernel, krScoped, krSkipStartupDialogs, krFont, krForceFont, krRenderer, krDrawThread,
                 krSwCompress, krOglCompress, krMem, krTexsize, krAccurate, krFps, isSdl3, krIs134126,
-                krVCursorScale, krMenuOpa, krPatchOverlayMode,
+                krVCursorScale, krMenuOpa, krPatchOverlayMode, krAnime4k,
                 ons, artVersion, artRotate, artPatch, artResolution, artSideCut, artSurfaceCache,
-                artFontCache, artPowerSaving, tyExternal, tyScoped, rpgMakerMod, renpyVersion, fontLauncher,
+                artFontCache, artPowerSaving, tyExternal, tyScoped, rpgMakerMod, rpgLegacyRenderer, rpgMvVersion, rpgMzVersion, renpyVersion, fontLauncher,
                 topInset = innerPadding.calculateTopPadding(),
                 onKrVersion = { krVersion = it },
                 onKrKernel = { krKernel = it },
@@ -593,6 +792,7 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
                 onKrFps = { krFps = it },
                 onKrVCursorScale = { krVCursorScale = it },
                 onKrMenuOpa = { krMenuOpa = it },
+                onKrAnime4k = { krAnime4k = it },
                 onResetKrFont = { krFont = "" },
                 onOns = { ons = it },
                 onArtVersion = { artVersion = it },
@@ -606,6 +806,9 @@ internal fun EngineSettingsDetailScreen(kind: EngineSettingsKind) {
                 onTyExternal = { tyExternal = it },
                 onTyScoped = { tyScoped = it },
                 onRpgMakerMod = { rpgMakerMod = it },
+                onRpgLegacyRenderer = { rpgLegacyRenderer = it },
+                onRpgMvVersion = { rpgMvVersion = it },
+                onRpgMzVersion = { rpgMzVersion = it },
                 onRenpyVersion = { renpyVersion = it },
             )
         }
@@ -623,19 +826,14 @@ private fun SettingsItemIcon(@DrawableRes iconRes: Int) {
     )
 }
 
-/** 顶部栏：遵守全局规范（Column + 页面背景色 + statusBarsPadding + 64dp 标题区，沉浸式）。 */
+/** 顶部栏：统一复用 AppTopBar（Miuix 页面背景取色）。 */
 @Composable
 private fun SettingsTopBar(title: String) {
-    Column(modifier = Modifier.fillMaxWidth().background(MiuixTheme.colorScheme.background)) {
-        Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
-            }
-        }
-    }
+    AppTopBar(
+        title = title,
+        background = MiuixTheme.colorScheme.background,
+        contentColor = MiuixTheme.colorScheme.onBackground,
+    )
 }
 
 /** 列表底部占位：避让系统导航栏。 */
@@ -646,6 +844,10 @@ private fun BottomInsetSpacer() {
 
 private typealias FontPickerLauncher = androidx.activity.compose.ManagedActivityResultLauncher<String, Uri?>
 
+/** 引擎设置详情页的滚动列表内容：按 [kind] 渲染对应引擎的设置卡片。
+ *  全部控件仅更新本地状态，统一由顶部保存按钮落盘（编辑→保存模型）。
+ *  KRKR 专属卡片按内核/版本条件显隐：渲染项随 [isSdl3] 切换数据源，
+ *  字体与「操作」卡片仅 kirikiri2 内核显示（krkrsdl3 走命令行参数不生效）。 */
 @Composable
 private fun LazyListPlaceholder(
     kind: EngineSettingsKind,
@@ -653,10 +855,11 @@ private fun LazyListPlaceholder(
     krFont: String, krForceFont: Boolean,
     krRenderer: String, krDrawThread: String, krSwCompress: String, krOglCompress: String,
     krMem: String, krTexsize: String, krAccurate: String, krFps: String, isSdl3: Boolean, krIs134126: Boolean,
-    krVCursorScale: String, krMenuOpa: String, krPatchOverlayMode: String,
+    krVCursorScale: String, krMenuOpa: String, krPatchOverlayMode: String, krAnime4k: String,
     ons: EngineSettingsStore.Ons, artVersion: String, artRotate: Boolean, artPatch: String,
     artResolution: String, artSideCut: String, artSurfaceCache: String, artFontCache: String,
     artPowerSaving: String, tyExternal: Boolean, tyScoped: Boolean, rpgMakerMod: Boolean,
+    rpgLegacyRenderer: Boolean, rpgMvVersion: String, rpgMzVersion: String,
     renpyVersion: String, fontLauncher: FontPickerLauncher,
     topInset: Dp,
     onKrVersion: (String) -> Unit, onKrKernel: (String) -> Unit, onKrScoped: (Boolean) -> Unit,
@@ -665,13 +868,14 @@ private fun LazyListPlaceholder(
     onKrForceFont: (Boolean) -> Unit, onKrRenderer: (String) -> Unit, onKrDrawThread: (String) -> Unit,
     onKrSwCompress: (String) -> Unit, onKrOglCompress: (String) -> Unit, onKrMem: (String) -> Unit,
     onKrTexsize: (String) -> Unit, onKrAccurate: (String) -> Unit, onKrFps: (String) -> Unit,
-    onKrVCursorScale: (String) -> Unit, onKrMenuOpa: (String) -> Unit,
+    onKrVCursorScale: (String) -> Unit, onKrMenuOpa: (String) -> Unit, onKrAnime4k: (String) -> Unit,
     onResetKrFont: () -> Unit, onOns: (EngineSettingsStore.Ons) -> Unit,
     onArtVersion: (String) -> Unit, onArtRotate: (Boolean) -> Unit, onArtPatch: (String) -> Unit,
     onArtResolution: (String) -> Unit, onArtSideCut: (String) -> Unit,
     onArtSurfaceCache: (String) -> Unit, onArtFontCache: (String) -> Unit,
     onArtPowerSaving: (String) -> Unit,
     onTyExternal: (Boolean) -> Unit, onTyScoped: (Boolean) -> Unit, onRpgMakerMod: (Boolean) -> Unit,
+    onRpgLegacyRenderer: (Boolean) -> Unit, onRpgMvVersion: (String) -> Unit, onRpgMzVersion: (String) -> Unit,
     onRenpyVersion: (String) -> Unit,
 ) {
     val krSelectMap = krSelectOptions()
@@ -722,6 +926,8 @@ private fun LazyListPlaceholder(
                 if (!isSdl3) {
                     SwitchPreference(title = stringResource(R.string.engine_settings_opengl_accurate_render), checked = krAccurate == "1", onCheckedChange = { b -> onKrAccurate(if (b) "1" else "0") })
                     EnumSliderRow(stringResource(R.string.engine_settings_memory_usage), krMemMap, krMem, onKrMem)
+                    // Anime4K 后处理仅 kirikiri2 内核路径支持（GLSurfaceView 注入），krkrsdl3 不提供
+                    DropdownRow(stringResource(R.string.engine_settings_anime4k), krAnime4kOptions(), krAnime4k, onKrAnime4k)
                 }
                 val rendererOptions = if (isSdl3) krSdl3RendererMap else krRendererMap
                 val selectedRenderer = if (isSdl3) {
@@ -751,6 +957,12 @@ private fun LazyListPlaceholder(
                 FontRow(stringResource(R.string.engine_settings_default_font), krFont.ifEmpty { stringResource(R.string.engine_settings_builtin_font) }, onResetKrFont, { fontLauncher.launch("*/*") })
                 if (krVersion != EngineSettingsStore.KR_126) {
                     SwitchPreference(title = stringResource(R.string.engine_settings_force_default_font), checked = krForceFont, onCheckedChange = onKrForceFont)
+                    Text(
+                        stringResource(R.string.engine_settings_force_font_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MiuixTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
                 }
             }
         }
@@ -808,6 +1020,9 @@ private fun LazyListPlaceholder(
                 SwitchPreference(title = stringResource(R.string.engine_settings_external_network_resources), checked = tyExternal, onCheckedChange = onTyExternal)
                 SwitchPreference(title = stringResource(R.string.engine_settings_scoped_save_dir), checked = tyScoped, onCheckedChange = onTyScoped)
                 SwitchPreference(title = stringResource(R.string.engine_settings_game_modifier), checked = rpgMakerMod, onCheckedChange = onRpgMakerMod)
+                SwitchPreference(title = stringResource(R.string.engine_settings_legacy_renderer), checked = rpgLegacyRenderer, onCheckedChange = onRpgLegacyRenderer)
+                DropdownRow(stringResource(R.string.engine_settings_engine_version_mv), rpgMvVersionOptions(), rpgMvVersion, onRpgMvVersion)
+                DropdownRow(stringResource(R.string.engine_settings_engine_version_mz), rpgMzVersionOptions(), rpgMzVersion, onRpgMzVersion)
             }
         }
 

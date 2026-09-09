@@ -40,6 +40,7 @@ import com.tyranor.next.core.settings.EngineSettingsStore
 import com.tyranor.next.core.settings.PerGameSettingsStore
 import com.tyranor.next.theme.MiuixSettingsTheme
 import com.tyranor.next.ui.common.AppAlertDialog
+import com.tyranor.next.ui.common.AppTopBar
 import com.tyranor.next.ui.common.TopBarIcon
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
@@ -63,6 +64,7 @@ fun PerGameSettingsScreen(game: ScanGame) {
     var krScoped by remember(gid) { mutableStateOf(PerGameSettingsStore.getBool(ctx, gid, PerGameSettingsStore.F_SCOPED_SAVE_DIR)) }
     var krSkipStartupDialogs by remember(gid) { mutableStateOf(PerGameSettingsStore.getBool(ctx, gid, PerGameSettingsStore.F_SKIP_STARTUP_DIALOGS)) }
     var krPatchOverlayMode by remember(gid) { mutableStateOf(PerGameSettingsStore.getStr(ctx, gid, PerGameSettingsStore.F_PATCH_OVERLAY_MODE)) }
+    var krAnime4kMode by remember(gid) { mutableStateOf(PerGameSettingsStore.getStr(ctx, gid, PerGameSettingsStore.F_ANIME4K_MODE)) }
     var krFont by remember(gid) { mutableStateOf(PerGameSettingsStore.getStr(ctx, gid, PerGameSettingsStore.F_DEFAULT_FONT)) }
     var krForceFont by remember(gid) { mutableStateOf(PerGameSettingsStore.getBool(ctx, gid, PerGameSettingsStore.F_FORCE_DEFAULT_FONT)) }
     val krRender = PerGameSettingsStore.KR_FIELDS.associateWith { field ->
@@ -95,6 +97,13 @@ fun PerGameSettingsScreen(game: ScanGame) {
             PerGameSettingsStore.getBool(ctx, gid, PerGameSettingsStore.F_RPG_MAKER_MOD_ENABLED),
         )
     }
+    var rpgLegacyRenderer by remember {
+        mutableStateOf(
+            PerGameSettingsStore.getBool(ctx, gid, PerGameSettingsStore.F_RPG_LEGACY_RENDERER),
+        )
+    }
+    var rpgMvVersion by remember { mutableStateOf(PerGameSettingsStore.getStr(ctx, gid, PerGameSettingsStore.F_RPG_MV_VERSION)) }
+    var rpgMzVersion by remember { mutableStateOf(PerGameSettingsStore.getStr(ctx, gid, PerGameSettingsStore.F_RPG_MZ_VERSION)) }
 
     val fontLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -108,6 +117,7 @@ fun PerGameSettingsScreen(game: ScanGame) {
     val globalKrScoped = EngineSettingsStore.isKrScopedSaveDir(ctx)
     val globalKrSkipStartupDialogs = EngineSettingsStore.isKrSkipStartupDialogs(ctx)
     val globalKrPatchOverlayMode = EngineSettingsStore.getKrPatchOverlayMode(ctx)
+    val globalKrAnime4kMode = EngineSettingsStore.getKrAnime4kMode(ctx)
     val globalKrFont = EngineSettingsStore.getKrDefaultFont(ctx)
     val globalForce = EngineSettingsStore.isKrForceDefaultFont(ctx)
     val configuredGlobalRenderer = EngineSettingsStore.getKrRenderer(ctx)
@@ -123,6 +133,9 @@ fun PerGameSettingsScreen(game: ScanGame) {
     val globalTyExternal = EngineSettingsStore.isTyranoExternalNetwork(ctx)
     val globalTyScoped = EngineSettingsStore.isTyranoScopedSaveDir(ctx)
     val globalRpgMakerMod = EngineSettingsStore.isRpgMakerModEnabled(ctx)
+    val globalRpgLegacyRenderer = EngineSettingsStore.isRpgLegacyRenderer(ctx)
+    val globalRpgMvVersion = EngineSettingsStore.getRpgMvEngineVersion(ctx)
+    val globalRpgMzVersion = EngineSettingsStore.getRpgMzEngineVersion(ctx)
     val globalRenpyVersion = EngineSettingsStore.getRenpyVersion(ctx)
     val krVersionMap = krSelectOptionsMap()
     val krKernelMap = krKernelOptionsMap()
@@ -172,6 +185,7 @@ fun PerGameSettingsScreen(game: ScanGame) {
         PerGameSettingsStore.setBool(ctx, gid, PerGameSettingsStore.F_SCOPED_SAVE_DIR, krScoped)
         PerGameSettingsStore.setBool(ctx, gid, PerGameSettingsStore.F_SKIP_STARTUP_DIALOGS, krSkipStartupDialogs)
         PerGameSettingsStore.setStr(ctx, gid, PerGameSettingsStore.F_PATCH_OVERLAY_MODE, krPatchOverlayMode)
+        PerGameSettingsStore.setStr(ctx, gid, PerGameSettingsStore.F_ANIME4K_MODE, krAnime4kMode?.takeIf { it in EngineSettingsStore.ANIME4K_MODES })
         PerGameSettingsStore.setStr(ctx, gid, PerGameSettingsStore.F_DEFAULT_FONT, krFont)
         PerGameSettingsStore.setBool(ctx, gid, PerGameSettingsStore.F_FORCE_DEFAULT_FONT, krForceFont)
         krRender.forEach { (field, st) ->
@@ -211,6 +225,14 @@ fun PerGameSettingsScreen(game: ScanGame) {
             PerGameSettingsStore.F_RPG_MAKER_MOD_ENABLED,
             rpgMakerMod,
         )
+        PerGameSettingsStore.setBool(
+            ctx,
+            gid,
+            PerGameSettingsStore.F_RPG_LEGACY_RENDERER,
+            rpgLegacyRenderer,
+        )
+        PerGameSettingsStore.setStr(ctx, gid, PerGameSettingsStore.F_RPG_MV_VERSION, rpgMvVersion)
+        PerGameSettingsStore.setStr(ctx, gid, PerGameSettingsStore.F_RPG_MZ_VERSION, rpgMzVersion)
     }
 
     MiuixSettingsTheme {
@@ -219,20 +241,17 @@ fun PerGameSettingsScreen(game: ScanGame) {
             containerColor = MiuixTheme.colorScheme.background,
             contentWindowInsets = WindowInsets(0.dp),
             topBar = {
-                Column(modifier = Modifier.fillMaxWidth().background(MiuixTheme.colorScheme.background)) {
-                    Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(game.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MiuixTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            TopBarIcon(painterResource(R.drawable.ic_save), stringResource(R.string.common_save), MiuixTheme.colorScheme.primary) {
-                                save()
-                                android.widget.Toast.makeText(ctx, perGameSettingsSavedMessage, android.widget.Toast.LENGTH_SHORT).show()
-                            }
+                AppTopBar(
+                    title = game.title,
+                    background = MiuixTheme.colorScheme.background,
+                    contentColor = MiuixTheme.colorScheme.onBackground,
+                    trailing = {
+                        TopBarIcon(painterResource(R.drawable.ic_save), stringResource(R.string.common_save), MiuixTheme.colorScheme.primary) {
+                            save()
+                            android.widget.Toast.makeText(ctx, perGameSettingsSavedMessage, android.widget.Toast.LENGTH_SHORT).show()
                         }
-                    }
-                }
+                    },
+                )
             },
         ) { innerPadding ->
             LazyColumn(
@@ -266,6 +285,13 @@ fun PerGameSettingsScreen(game: ScanGame) {
                                     OverrideChoice(stringResource(R.string.engine_settings_memory_usage), krMemMap, globalMem, krRender[PerGameSettingsStore.F_MEM_USAGE]!!.value, emptyLabel = engineDefault) {
                                         krRender[PerGameSettingsStore.F_MEM_USAGE]!!.value = it
                                     }
+                                    // Anime4K 后处理仅 kirikiri2 内核路径支持（GLSurfaceView 注入）
+                                    OverrideChoice(
+                                        stringResource(R.string.engine_settings_anime4k),
+                                        krAnime4kOptionsMap(),
+                                        globalKrAnime4kMode,
+                                        krAnime4kMode,
+                                    ) { krAnime4kMode = it }
                                 }
                                 OverrideChoice(stringResource(R.string.engine_settings_renderer), krRendererMap, globalRenderer, krRender[PerGameSettingsStore.F_RENDERER]!!.value, emptyLabel = engineDefault) {
                                     krRender[PerGameSettingsStore.F_RENDERER]!!.value = it
@@ -321,7 +347,9 @@ fun PerGameSettingsScreen(game: ScanGame) {
                         if (!isSdl3) {
                             item {
                                 SectionCard(stringResource(R.string.engine_settings_font)) {
-                                    OverrideFont(stringResource(R.string.engine_settings_default_font), globalKrFont, krFont, onReset = { krFont = "" }, onPick = { fontLauncher.launch("*/*") })
+                                    // 「跟随全局」必须删除覆盖键（null），存 "" 会被引擎当作
+                                    // 显式内置字体覆盖，导致全局字体设置对该游戏永久失效
+                                    OverrideFont(stringResource(R.string.engine_settings_default_font), globalKrFont, krFont, onReset = { krFont = null }, onPick = { fontLauncher.launch("*/*") })
                                     if (effVersion != EngineSettingsStore.KR_126) {
                                         OverrideSwitch(stringResource(R.string.engine_settings_force_default_font_short), globalForce, krForceFont) { krForceFont = it }
                                     }
@@ -372,9 +400,22 @@ fun PerGameSettingsScreen(game: ScanGame) {
                             )
                         }
                     }
+                    EngineType.RPG_MV, EngineType.RPG_MZ -> item {
+                        val isMv = game.engine == EngineType.RPG_MV
+                        val versionMap = if (isMv) rpgMvVersionOptionsMap() else rpgMzVersionOptionsMap()
+                        val globalVersion = if (isMv) globalRpgMvVersion else globalRpgMzVersion
+                        val overrideVersion = if (isMv) rpgMvVersion else rpgMzVersion
+                        SectionCard(game.engine.displayName) {
+                            OverrideChoice(stringResource(R.string.engine_settings_engine_version), versionMap, globalVersion, overrideVersion) { v ->
+                                if (isMv) rpgMvVersion = v else rpgMzVersion = v
+                            }
+                            OverrideSwitch(stringResource(R.string.engine_settings_external_network), globalTyExternal, tyExternal) { tyExternal = it }
+                            OverrideSwitch(stringResource(R.string.engine_settings_scoped_save_dir), globalTyScoped, tyScoped) { tyScoped = it }
+                            OverrideSwitch(stringResource(R.string.engine_settings_game_modifier), globalRpgMakerMod, rpgMakerMod) { rpgMakerMod = it }
+                            OverrideSwitch(stringResource(R.string.engine_settings_legacy_renderer), globalRpgLegacyRenderer, rpgLegacyRenderer) { rpgLegacyRenderer = it }
+                        }
+                    }
                     EngineType.TYRANO,
-                    EngineType.RPG_MV,
-                    EngineType.RPG_MZ,
                     EngineType.VN,
                     EngineType.WEB_OTHER,
                     EngineType.UNKNOWN -> item {
@@ -388,9 +429,6 @@ fun PerGameSettingsScreen(game: ScanGame) {
                             OverrideSwitch(stringResource(R.string.engine_settings_external_network), globalTyExternal, tyExternal) { tyExternal = it }
                             if (game.engine !in setOf(EngineType.VN, EngineType.WEB_OTHER)) {
                                 OverrideSwitch(stringResource(R.string.engine_settings_scoped_save_dir), globalTyScoped, tyScoped) { tyScoped = it }
-                            }
-                            if (game.engine == EngineType.RPG_MV || game.engine == EngineType.RPG_MZ) {
-                                OverrideSwitch(stringResource(R.string.engine_settings_game_modifier), globalRpgMakerMod, rpgMakerMod) { rpgMakerMod = it }
                             }
                         }
                     }

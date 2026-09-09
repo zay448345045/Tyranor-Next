@@ -61,10 +61,20 @@
     <string name="settings_qq_group">QQ グループ</string>
     <string name="settings_telegram_channel">Telegram チャンネル</string>
     <string name="update_found_title">新しいバージョンがあります</string>
-    <string name="update_current_version">現在のバージョン：%1$s</string>
-    <string name="update_latest_version">最新バージョン：%1$s</string>
-    <string name="update_open_github_message">GitHub のリリースページを開いて新しいバージョンをダウンロードしますか？</string>
-    <string name="update_go_download">ダウンロード</string>
+    <string name="update_version_item">TyranorNext：%1$s</string>
+    <string name="update_download_cancel">ダウンロードをキャンセル</string>
+    <string name="update_downloading_status">ダウンロード中：%1$s / %2$s（%3$d%%）</string>
+    <string name="update_download_completed_title">ダウンロード完了</string>
+    <string name="update_download_completed_message">%1$s をダウンロードしました。今すぐインストールしますか？</string>
+    <string name="update_install">インストール</string>
+    <string name="update_retry">再試行</string>
+    <string name="update_download_failed_title">ダウンロード失敗</string>
+    <string name="update_download_failed_generic">ダウンロードに失敗しました。ネットワークを確認して再試行してください</string>
+    <string name="update_download_insufficient_space">ストレージ容量が不足しているためダウンロードできません</string>
+    <string name="update_download_checksum_failed">パッケージの検証に失敗しました。再ダウンロードしてください</string>
+    <string name="update_download_move_failed">パッケージの保存に失敗しました。再試行してください</string>
+    <string name="update_download_http_failed">ダウンロードに失敗しました（HTTP %1$d）。しばらくしてから再試行してください</string>
+    <string name="update_install_failed">インストーラーを起動できません</string>
     <string name="update_channel_name">バージョン更新</string>
     <string name="update_channel_description">Tyranor Next の新しいバージョンを検出したときに通知します</string>
     <string name="update_notification_title">新しいバージョン %1$s があります</string>
@@ -72,6 +82,7 @@
     <string name="update_notification_big_text">%1$s\nGitHub のリリース詳細を開いて新しいバージョンをダウンロードします。</string>
     <string name="update_network_failed">ネットワーク要求に失敗しました</string>
     <string name="update_github_request_failed">GitHub Releases の要求に失敗しました：HTTP %1$d</string>
+    <string name="update_open_releases">GitHub Releases を開く</string>
 
     <string name="engine_list_title">%1$s エンジンリスト</string>
     <string name="engine_module_missing_title">モジュール未インストール</string>
@@ -190,6 +201,7 @@
     <string name="engine_settings_default_font">既定フォント</string>
     <string name="engine_settings_builtin_font">内蔵フォント</string>
     <string name="engine_settings_force_default_font">既定フォントを強制使用</string>
+    <string name="engine_settings_force_font_hint">オフの場合、ゲームに存在しないフォントのみ置き換えます。変更したフォントを完全に反映するには強制を有効にしてください</string>
     <string name="engine_settings_force_default_font_short">既定フォントを強制</string>
     <string name="engine_settings_fullscreen_stretch">全画面に引き伸ばす</string>
     <string name="engine_settings_ignore_cutout">ノッチを無視</string>
@@ -207,6 +219,9 @@
     <string name="engine_settings_external_network_resources">外部ネットワークリソースを許可</string>
     <string name="engine_settings_external_network">外部ネットワークを許可</string>
     <string name="engine_settings_game_modifier">ゲーム改造ツール</string>
+    <string name="engine_settings_legacy_renderer">PIXI 互換レンダリング（TynMVエンジン セッションのみ有効）</string>
+    <string name="engine_settings_engine_version_mv">エンジンバージョン - MV</string>
+    <string name="engine_settings_engine_version_mz">エンジンバージョン - MZ</string>
     <string name="engine_settings_renpy_module_description">Ren’Py は外部 APK エンジンモジュールを使用し、指定バージョンに対応するプラグインで開きます。モジュールのインストール後は既定で有効です。</string>
     <string name="engine_settings_renpy_module_description_global">Ren’Py は外部 APK エンジンモジュールを使用し、指定バージョンに対応するプラグインで開きます。</string>
     <string name="engine_settings_rpgmaker_module_description">RPG Maker XP/VX/VX Ace/mkxp-z は外部 APK エンジンモジュールを使用します。モジュールのインストール後は既定で有効です。現在、メインアプリから上書きできる個別ゲーム設定はありません。</string>
@@ -231,6 +246,19 @@
     <string name="engine_option_auto_patch_ask">起動時に確認</string>
     <string name="engine_option_force_enable">強制的に有効</string>
     <string name="engine_option_off">オフ</string>
+    <string name="engine_option_rpg_mv_v0">Tyranor-2.3.4</string>
+    <string name="engine_option_rpg_mv_v1">TynMV-0.1</string>
+    <string name="engine_option_rpg_mv_v2">TynMV-0.2</string>
+    <string name="engine_option_rpg_mz_v0">Tyranor-2.3.4</string>
+    <string name="engine_option_rpg_mz_v2">TynMZ-0.1</string>
+    <string name="engine_settings_anime4k">アップスケーリング</string>
+    <string name="engine_option_anime4k_fast">高速（S）</string>
+    <string name="engine_option_anime4k_balanced">バランス（M）</string>
+    <string name="engine_option_anime4k_high">高品質（L）</string>
+    <string name="engine_option_anime4k_soft_fast">ソフト・高速</string>
+    <string name="engine_option_anime4k_soft_balanced">ソフト・バランス</string>
+    <string name="engine_option_anime4k_soft_high">ソフト・高品質</string>
+    <string name="engine_option_anime4k_deblur">ぼかし除去（DoG）</string>
 
     <string name="cover_source_local">ローカルカバー</string>
     <string name="cover_source_custom">カスタムカバー</string>

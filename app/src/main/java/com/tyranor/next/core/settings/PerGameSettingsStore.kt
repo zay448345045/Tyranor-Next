@@ -38,6 +38,7 @@ object PerGameSettingsStore {
     const val F_FPS_LIMIT = "fps_limit"
     const val F_VCURSOR_SCALE = "vcursor_scale"
     const val F_MENU_HANDLER_OPA = "menu_handler_opa"
+    const val F_ANIME4K_MODE = "anime4k_mode"
     val KR_FIELDS = listOf(
         F_RENDERER, F_SOFTWARE_DRAW_THREAD, F_SOFTWARE_COMPRESS_TEX, F_OGL_COMPRESS_TEX,
         F_MEM_USAGE, F_OGL_MAX_TEXSIZE, F_OGL_ACCURATE_RENDER, F_FPS_LIMIT,
@@ -56,6 +57,9 @@ object PerGameSettingsStore {
 
     // RPG Maker MV/MZ
     const val F_RPG_MAKER_MOD_ENABLED = "rpg_maker_mod_enabled"
+    const val F_RPG_LEGACY_RENDERER = "rpg_legacy_renderer"
+    const val F_RPG_MV_VERSION = "rpg_mv_engine_version"
+    const val F_RPG_MZ_VERSION = "rpg_mz_engine_version"
 
     // Tyrano 与 RPG Maker Web 共用的存档目录开关（GameSaveManager 按此键读取）
     const val F_TY_SCOPED = "ty_scoped"
