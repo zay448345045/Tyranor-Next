@@ -27,7 +27,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -67,19 +66,38 @@ import com.tyranor.next.R
 import com.tyranor.next.core.engine.EngineType
 import com.tyranor.next.core.game.launch.EngineLauncher
 import com.tyranor.next.core.game.model.ScanGame
+import com.tyranor.next.core.game.save.RpgSaveFormat
+import com.tyranor.next.theme.AdvancedGlassSurfaceHigh
+import com.tyranor.next.theme.glassShadow
+import com.tyranor.next.theme.AppThemeColors
+import com.tyranor.next.theme.GlassSurfaceHigh
 import com.tyranor.next.theme.NavWhite
+import com.tyranor.next.theme.QuickLaunchFallback
+import com.tyranor.next.theme.glassBorder
+import com.tyranor.next.theme.AppComponentShape
 import com.tyranor.next.ui.common.AppAlertDialog
 import com.tyranor.next.ui.common.AppTopBar
 import com.tyranor.next.ui.common.TimeFormats
+import com.tyranor.next.ui.common.boxBlurArgb
 import com.tyranor.next.ui.common.glassNavBottomInset
+import com.tyranor.next.ui.common.LaunchErrorDialog
+import com.tyranor.next.ui.common.LaunchErrorState
+import com.tyranor.next.ui.common.toErrorState
+import com.tyranor.next.ui.common.userMessage
 import com.tyranor.next.ui.game.GameActionsSheet
+import com.tyranor.next.ui.game.RpgSaveFormatDialog
 import com.tyranor.next.ui.game.coverColor
+import com.tyranor.next.ui.game.dialogArgs
 import com.tyranor.next.ui.game.rememberCoverBitmap
+import com.tyranor.next.ui.game.rpgConvertResultMessage
 import com.tyranor.next.ui.game.startActivityWithPageTransition
 import com.tyranor.next.ui.main.MainLibraryUiState
 import com.tyranor.next.ui.settings.PerGameSettingsActivity
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
@@ -95,8 +113,16 @@ fun HomeScreen(
     val quickLaunch = libraryState.quickLaunch
     val recentGames = libraryState.recentGames
     var selectedGame by remember { mutableStateOf<ScanGame?>(null) }
-    var launchError by remember { mutableStateOf<String?>(null) }
+    var launchError by remember { mutableStateOf<LaunchErrorState?>(null) }
     var patchLaunchTarget by remember { mutableStateOf<ScanGame?>(null) }
+    // MV/MZ 存档格式转化确认：待转化检测结果 + 目标游戏 + 已选补丁策略（Artemis 选择后串联）
+    var saveFormatTarget by remember { mutableStateOf<ScanGame?>(null) }
+    var saveFormatDetection by remember { mutableStateOf<RpgSaveFormat.Detection?>(null) }
+    var pendingPatchChoice by remember { mutableStateOf<EngineLauncher.ArtemisPatchChoice?>(null) }
+    val saveFormatConvertedFormat = stringResource(R.string.save_format_converted_count)
+    val saveFormatConvertedWithFailuresFormat = stringResource(R.string.save_format_converted_with_failures)
+    val saveFormatConvertFailedMessage = stringResource(R.string.save_format_convert_failed)
+    val saveBusyEngineRunningMessage = stringResource(R.string.save_busy_engine_running)
 
     LaunchedEffect(libraryState.games) {
         selectedGame = selectedGame?.let { selected ->
@@ -119,14 +145,62 @@ fun HomeScreen(
         onRecentRemoved(target)
     }
 
+    /** Artemis 选择（或无需补丁）后，再检查 MV/MZ 存档格式；有标准存档则弹窗，否则直接启动。
+     *  开启存档互通时跳过弹窗——启动前同步已覆盖其语义。 */
+    fun launchWithSaveFormatGate(game: ScanGame, patchChoice: EngineLauncher.ArtemisPatchChoice?) {
+        scope.launch {
+            if (EngineLauncher.isRpgSaveInteropEnabled(context, game)) {
+                launchError = EngineLauncher.launch(context, game, patchChoice).toErrorState(context)
+                return@launch
+            }
+            val pending = EngineLauncher.rpgSaveFormatPending(context, game)
+            if (pending != null) {
+                saveFormatTarget = game
+                saveFormatDetection = pending
+                pendingPatchChoice = patchChoice
+            } else {
+                launchError = EngineLauncher.launch(context, game, patchChoice).toErrorState(context)
+            }
+        }
+    }
+
     // 点按直接启动游戏；Artemis 按既有策略弹出补丁确认（与游戏页长按启动一致）。
     fun launchGame(game: ScanGame) {
         scope.launch {
             if (EngineLauncher.needsArtemisPatchConfirm(context, game)) {
                 patchLaunchTarget = game
             } else {
-                launchError = EngineLauncher.launch(context, game)
+                launchWithSaveFormatGate(game, null)
             }
+        }
+    }
+
+    /** 用户确认转化后执行转化（best-effort），随后按既定策略启动。 */
+    fun resolveSaveFormat(target: ScanGame, convert: Boolean) {
+        val detection = saveFormatDetection
+        val patchChoice = pendingPatchChoice
+        saveFormatTarget = null
+        saveFormatDetection = null
+        pendingPatchChoice = null
+        scope.launch {
+            if (convert && detection != null) {
+                val op = try {
+                    withContext(Dispatchers.IO) { EngineLauncher.convertRpgSaveFormat(context, target) }
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Throwable) {
+                    null
+                }
+                val message = rpgConvertResultMessage(
+                    op,
+                    saveFormatConvertedFormat,
+                    saveFormatConvertedWithFailuresFormat,
+                    saveFormatConvertFailedMessage,
+                    saveBusyEngineRunningMessage,
+                )
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+            }
+            launchError = EngineLauncher.launch(context, target, patchChoice).toErrorState(context)
         }
     }
 
@@ -237,10 +311,9 @@ fun HomeScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val target = patchLaunchTarget
                         patchLaunchTarget = null
-                        scope.launch {
-                            launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.ALWAYS)
-                        }
+                        target?.let { launchWithSaveFormatGate(it, EngineLauncher.ArtemisPatchChoice.ALWAYS) }
                     },
                 ) { Text(stringResource(R.string.game_patch_always)) }
             },
@@ -248,18 +321,16 @@ fun HomeScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(
                         onClick = {
+                            val target = patchLaunchTarget
                             patchLaunchTarget = null
-                            scope.launch {
-                                launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.NEVER)
-                            }
+                            target?.let { launchWithSaveFormatGate(it, EngineLauncher.ArtemisPatchChoice.NEVER) }
                         },
                     ) { Text(stringResource(R.string.game_patch_never)) }
                     TextButton(
                         onClick = {
+                            val target = patchLaunchTarget
                             patchLaunchTarget = null
-                            scope.launch {
-                                launchError = EngineLauncher.launch(context, game, EngineLauncher.ArtemisPatchChoice.ONCE)
-                            }
+                            target?.let { launchWithSaveFormatGate(it, EngineLauncher.ArtemisPatchChoice.ONCE) }
                         },
                     ) { Text(stringResource(R.string.game_patch_once)) }
                 }
@@ -267,21 +338,26 @@ fun HomeScreen(
         )
     }
 
-    launchError?.let { message ->
-        AppAlertDialog(
-            onDismissRequest = { launchError = null },
-            title = { Text(stringResource(R.string.game_launch_failed), style = MaterialTheme.typography.titleMedium) },
-            text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
-            confirmButton = {
-                TextButton(onClick = { launchError = null }) { Text(stringResource(R.string.common_confirm)) }
-            },
-        )
+    // ===== MV/MZ 存档格式转化确认（标准 → Tyranor）；点遮罩 = 保持原样启动 =====
+    saveFormatTarget?.let { target ->
+        saveFormatDetection?.let { detection ->
+            val (standardCount, hashedCount) = detection.dialogArgs()
+            RpgSaveFormatDialog(
+                standardCount = standardCount,
+                hashedCount = hashedCount,
+                onChoice = { convert -> resolveSaveFormat(target, convert) },
+            )
+        }
+    }
+
+    launchError?.let { state ->
+        LaunchErrorDialog(state = state, onDismiss = { launchError = null })
     }
 }
 
 /**
- * 快捷启动区（最多 3 个）：小屏（可用宽度 < 600dp，竖屏手机）单张大卡左右滑动切换；
- * 大屏（横屏/平板）直接一行三个卡位，空槽显示占位。两种形态都限制最大宽度并水平居中。
+ * 快捷启动区（最多 3 个）：小屏（可用宽度 < 600dp，竖屏手机）单张大卡左右滑动切换（限宽居中）；
+ * 大屏（横屏/平板）一行三个卡位**占满可用宽度**，空槽显示占位。
  */
 @Composable
 private fun QuickLaunchSection(
@@ -294,10 +370,11 @@ private fun QuickLaunchSection(
         contentAlignment = Alignment.Center,
     ) {
         if (maxWidth >= 600.dp) {
-            // 三张横幅卡并排需要比单卡形态更宽的行：上限放宽到 900dp，
-            // 每张卡约 293dp，保证左侧文字列在封面之外仍有可用宽度
+            // 大屏（平板/横屏）三张卡并排**占满可用宽度**（不再设 900dp 上限，
+            // 否则平板/大窗口下两侧会空出一条）；卡内封面宽度有 99dp 上限、文字列自适应，
+            // 因此拉宽不会挤压内容。
             Row(
-                modifier = Modifier.widthIn(max = 900.dp).fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 repeat(3) { i ->
@@ -364,23 +441,41 @@ private fun QuickLaunchCard(
     BoxWithConstraints(
         modifier = modifier
             .height(172.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(QuickLaunchFallbackBackground),
+            .glassShadow()
+            .clip(AppComponentShape)
+            .background(QuickLaunchFallback)
+            .glassBorder(),
     ) {
-        val engineName = if (game.engine == EngineType.UNKNOWN) {
-            stringResource(R.string.engine_name_unknown)
-        } else {
-            game.engine.displayName
+        val engineName = when (game.engine) {
+            EngineType.UNKNOWN -> stringResource(R.string.engine_name_unknown)
+            // 卡片用短名「Switch」，避免「Nintendo Switch」过长
+            EngineType.NINTENDO_SWITCH -> stringResource(R.string.engine_name_switch)
+            else -> game.engine.displayName
         }
         val cardMaxWidth = maxWidth
         val coverBitmap by rememberCoverBitmap(game.coverUri)
         coverBitmap?.let { bmp ->
-            // 封面先缩到 40px 再拉伸铺满，全版本都有柔化效果；API 31+ 叠加真高斯模糊
-            val blurred = remember(bmp) {
+            // 封面缩到 40px 再拉伸铺满：API 31+ 由 Modifier.blur（RenderEffect）做真高斯；
+            // API 26-30 无 RenderEffect，若只放大 40px 会呈马赛克（issue #76），
+            // 因此对小图先做 CPU 盒式模糊（3 轮近似高斯）再拉伸，保证低版本同样柔和。
+            val blurSupported = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+            val blurred = remember(bmp, blurSupported) {
                 val src = bmp.asAndroidBitmap()
                 val width = 40
                 val height = (src.height * width / src.width).coerceAtLeast(1)
-                android.graphics.Bitmap.createScaledBitmap(src, width, height, true).asImageBitmap()
+                val scaled = android.graphics.Bitmap.createScaledBitmap(src, width, height, true)
+                if (blurSupported) {
+                    scaled.asImageBitmap()
+                } else {
+                    val smallWidth = scaled.width
+                    val smallHeight = scaled.height
+                    val pixels = IntArray(smallWidth * smallHeight)
+                    scaled.getPixels(pixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
+                    boxBlurArgb(pixels, smallWidth, smallHeight, radius = 3)
+                    android.graphics.Bitmap
+                        .createBitmap(pixels, smallWidth, smallHeight, android.graphics.Bitmap.Config.ARGB_8888)
+                        .asImageBitmap()
+                }
             }
             Image(
                 bitmap = blurred,
@@ -430,7 +525,7 @@ private fun QuickLaunchCard(
                         modifier = Modifier
                             .width(coverWidth)
                             .height(coverWidth * 4f / 3f)
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(AppComponentShape)
                             .background(Color.White.copy(alpha = 0.18f)),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -466,17 +561,16 @@ private fun QuickLaunchCard(
     }
 }
 
-/** 快捷启动卡无封面/封面加载中时的中性兜底底色。 */
-private val QuickLaunchFallbackBackground = Color(0xFF303338)
-
 /** 快捷启动空状态：尚未设置任何快捷启动时显示整张白色卡片 + 加号。 */
 @Composable
 private fun QuickLaunchEmptyCard(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .height(172.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(NavWhite),
+            .glassShadow()
+            .clip(AppComponentShape)
+            .background(NavWhite)
+            .glassBorder(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -518,27 +612,36 @@ private fun RecentGameRow(
         }
         val formattedOpenTime = remember(game.openTime) { TimeFormats.formatDateTime(game.openTime) }
         // 统一裁切圆角：红色删除层与白色内容层圆角一致，内容左移越界部分被裁掉
-        Box(Modifier.clip(RoundedCornerShape(8.dp))) {
-            // 删除层：主题色背景 + 白色删除图标，仅滑出约 1/6 时露出右侧「删除」区域
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(MaterialTheme.colorScheme.primary)
-                    .clickable(onClick = onSwipeDelete),
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
+        Box(Modifier.clip(AppComponentShape)) {
+            // 删除层：仅滑出约 1/6 时露出右侧「删除」区域；玻璃风格固定用亮玻璃面（避免主题色半透明），
+            // 默认风格保持主题色底。仅在滑出（offset < 0）时渲染
+            if (offset < 0f) {
+                Box(
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .width(with(LocalDensity.current) { revealPx.toDp() })
-                        .align(Alignment.CenterEnd),
+                        .matchParentSize()
+                        .background(
+                            when {
+                                AppThemeColors.isAdvancedGlass -> AdvancedGlassSurfaceHigh
+                                AppThemeColors.isGlass -> GlassSurfaceHigh
+                                else -> MaterialTheme.colorScheme.primary
+                            },
+                        )
+                        .clickable(onClick = onSwipeDelete),
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = stringResource(R.string.common_delete),
-                        tint = Color.White,
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(with(LocalDensity.current) { revealPx.toDp() })
+                            .align(Alignment.CenterEnd),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Delete,
+                            contentDescription = stringResource(R.string.common_delete),
+                            tint = Color.White,
+                        )
+                    }
                 }
             }
             Row(
@@ -546,6 +649,7 @@ private fun RecentGameRow(
                     .offset { IntOffset(offset.roundToInt(), 0) }
                     .fillMaxWidth()
                     .background(NavWhite)
+                    .glassBorder()
                     .combinedClickable(
                         onClick = {
                             if (offset != 0f) {

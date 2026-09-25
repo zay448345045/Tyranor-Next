@@ -2,11 +2,7 @@ package com.tyranor.next.ui.settings
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,36 +16,40 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.tyranor.next.R
+import com.tyranor.next.ui.common.AppScreenActivity
 import com.tyranor.next.ui.common.AppTopBar
-import com.tyranor.next.ui.common.ProvideAppLocale
+import com.tyranor.next.ui.common.isSideRailLayout
+import com.tyranor.next.ui.common.BottomInsetSpacer
 import com.tyranor.next.core.settings.AppSettingsStore
+import com.tyranor.next.core.settings.AppearanceStyle
 import com.tyranor.next.theme.AppThemeColors
+import com.tyranor.next.theme.glassShadow
 import com.tyranor.next.theme.MiuixSettingsTheme
-import com.tyranor.next.theme.TyranorNextTheme
+import com.tyranor.next.theme.glassBorder
+import com.tyranor.next.theme.AppComponentCornerRadius
 import com.tyranor.next.ui.common.AppAlertDialog
-import com.tyranor.next.ui.common.WithoutPressIndication
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
 import top.yukonga.miuix.kmp.basic.ColorPicker
 import top.yukonga.miuix.kmp.basic.Scaffold as MiuixScaffold
@@ -59,40 +59,12 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 应用设置页 Activity：入口见设置页「应用设置」项。 */
-class AppSettingsActivity : ComponentActivity() {
+class AppSettingsActivity : AppScreenActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val darkMode = AppSettingsStore.isDarkEffective(this)
-        enableEdgeToEdge(
-            statusBarStyle = if (darkMode) androidx.activity.SystemBarStyle.dark(Color.TRANSPARENT) else androidx.activity.SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-            navigationBarStyle = if (darkMode) androidx.activity.SystemBarStyle.dark(Color.TRANSPARENT) else androidx.activity.SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-        )
-        @Suppress("DEPRECATION")
-        window.statusBarColor = Color.TRANSPARENT
-        @Suppress("DEPRECATION")
-        window.navigationBarColor = Color.TRANSPARENT
-
-        setContent {
-            ProvideAppLocale {
-                TyranorNextTheme {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        color = MaterialTheme.colorScheme.background,
-                    ) {
-                        WithoutPressIndication {
-                            AppSettingsScreen()
-                        }
-                    }
-                }
-            }
+        setAppScreenContent {
+            AppSettingsScreen()
         }
-    }
-
-    @Suppress("DEPRECATION")
-    override fun finish() {
-        super.finish()
-        overridePendingTransition(R.anim.page_slide_in_from_top, R.anim.page_slide_out_to_bottom)
     }
 
     companion object {
@@ -105,7 +77,21 @@ class AppSettingsActivity : ComponentActivity() {
 @Composable
 internal fun AppSettingsScreen() {
     val ctx = LocalContext.current
+    val navStyle by AppSettingsStore.navStyleState.collectAsState()
+    val engineTabs by AppSettingsStore.engineTabsState.collectAsState()
+    val sideRailEnabled by AppSettingsStore.sideRailState.collectAsState()
+    val glass = AppThemeColors.isGlass
+    // 平板/大窗口 + 侧边栏开关开启：导航以侧栏显示（液态玻璃两档不参与侧栏适配）
+    val railLayout = isSideRailLayout()
     var showColorPicker by remember { mutableStateOf(false) }
+    // 本页可能先于主界面被组合（进程重建后直接恢复到设置页）：主动加载一次持久化值，
+    // 否则下拉/开关会显示成默认档（与磁盘上的真实取值不一致）
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            AppSettingsStore.initNavStyle(ctx)
+            AppSettingsStore.initSideRail(ctx)
+        }
+    }
 
     MiuixSettingsTheme {
         MiuixScaffold(
@@ -121,12 +107,15 @@ internal fun AppSettingsScreen() {
             },
         ) { innerPadding ->
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
-                contentPadding = PaddingValues(top = innerPadding.calculateTopPadding() + 12.dp, bottom = 24.dp),
+                // 顶栏透明：列表整体垫在顶栏下方（持久 padding），避免滚动时内容穿过顶栏
+                modifier = Modifier.fillMaxSize()
+                    .padding(horizontal = 12.dp)
+                    .padding(top = innerPadding.calculateTopPadding()),
+                contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
-                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
                         Column(Modifier.padding(vertical = 4.dp)) {
                             var language by remember { mutableStateOf(AppSettingsStore.getLanguage(ctx)) }
                             val languageModes = listOf(
@@ -152,7 +141,7 @@ internal fun AppSettingsScreen() {
                     }
                 }
                 item {
-                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
                         Column(Modifier.padding(vertical = 4.dp)) {
                             ArrowPreference(
                                 title = stringResource(R.string.settings_color_wheel),
@@ -178,7 +167,43 @@ internal fun AppSettingsScreen() {
                     }
                 }
                 item {
-                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
+                        Column(Modifier.padding(vertical = 4.dp)) {
+                            // 外观风格：默认 / 复古玻璃 / 高级玻璃（切换即时全 App 生效并持久化）
+                            val appearanceStyles = AppearanceStyle.entries
+                            val appearanceLabels = appearanceStyles.map { style ->
+                                stringResource(
+                                    when (style) {
+                                        AppearanceStyle.DEFAULT -> R.string.settings_appearance_style_default
+                                        AppearanceStyle.RETRO_GLASS -> R.string.settings_appearance_style_glass
+                                        AppearanceStyle.ADVANCED_GLASS -> R.string.settings_appearance_style_advanced_glass
+                                    },
+                                )
+                            }
+                            val appearanceIndex = appearanceStyles
+                                .indexOf(AppThemeColors.appearanceStyle)
+                                .coerceAtLeast(0)
+                            OverlayDropdownPreference(
+                                title = stringResource(R.string.settings_appearance_style),
+                                summary = if (AppThemeColors.isAdvancedGlass) {
+                                    stringResource(R.string.settings_appearance_style_advanced_glass_desc)
+                                } else {
+                                    null
+                                },
+                                items = appearanceLabels,
+                                selectedIndex = appearanceIndex,
+                                onSelectedIndexChange = { index ->
+                                    appearanceStyles.getOrNull(index)?.let { style ->
+                                        AppSettingsStore.setAppearanceStyle(ctx, style)
+                                        AppThemeColors.refresh(ctx)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+                item {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
                         Column(Modifier.padding(vertical = 4.dp)) {
                             // 状态驱动选中项：跟随系统时系统深浅不变也不会漏刷新下拉展示
                             var themeMode by remember { mutableStateOf(AppSettingsStore.getThemeMode(ctx)) }
@@ -191,8 +216,10 @@ internal fun AppSettingsScreen() {
                                 .let { if (it < 0) 1 else it } // 未知存量值回退浅色
                             OverlayDropdownPreference(
                                 title = stringResource(R.string.settings_theme_mode),
+                                summary = if (glass) stringResource(R.string.settings_disabled_in_glass_style) else null,
                                 items = themeModes.map { it.second },
                                 selectedIndex = modeIndex,
+                                enabled = !glass,
                                 onSelectedIndexChange = { index ->
                                     themeModes.getOrNull(index)?.first?.let { mode ->
                                         themeMode = mode
@@ -205,11 +232,13 @@ internal fun AppSettingsScreen() {
                     }
                 }
                 item {
-                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
                         Column(Modifier.padding(vertical = 4.dp)) {
                             SwitchPreference(
                                 title = stringResource(R.string.settings_tone_switch),
+                                summary = if (glass) stringResource(R.string.settings_disabled_in_glass_style) else null,
                                 checked = AppThemeColors.toneSwitchEnabled,
+                                enabled = !glass,
                                 onCheckedChange = { checked ->
                                     AppSettingsStore.setToneSwitchEnabled(ctx, checked)
                                     AppThemeColors.refresh(ctx)
@@ -219,16 +248,76 @@ internal fun AppSettingsScreen() {
                     }
                 }
                 item {
-                    MiuixCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 8.dp) {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
+                        Column(Modifier.padding(vertical = 4.dp)) {
+                            // 导航栏样式：默认 / 液态玻璃 · 经典 / 液态玻璃 · 透镜 三选一。
+                            // 「透镜」档需要 Android 13+ 的 RuntimeShader，低版本不提供该选项（列表里不出现）。
+                            val navStyleOptions = buildList {
+                                add(
+                                    AppSettingsStore.NAV_STYLE_DEFAULT to
+                                        stringResource(R.string.settings_nav_bar_default),
+                                )
+                                add(
+                                    AppSettingsStore.NAV_STYLE_LIQUID_GLASS to
+                                        stringResource(R.string.settings_nav_bar_liquid_glass),
+                                )
+                                if (AppSettingsStore.supportsLiquidGlassEnhanced) {
+                                    add(
+                                        AppSettingsStore.NAV_STYLE_LIQUID_GLASS_ENHANCED to
+                                            stringResource(R.string.settings_nav_bar_liquid_glass_enhanced),
+                                    )
+                                }
+                            }
+                            val navStyleIndex = navStyleOptions
+                                .indexOfFirst { it.first == navStyle }
+                                .coerceAtLeast(0)
+                            OverlayDropdownPreference(
+                                title = stringResource(R.string.settings_nav_bar_title),
+                                // 说明只保留「安卓版本提醒」：默认档无需提醒（任何版本可用）
+                                summary = when {
+                                    // 平板侧栏布局：液态玻璃两档不参与侧栏适配，提示实际以侧栏显示
+                                    railLayout && navStyle != AppSettingsStore.NAV_STYLE_DEFAULT ->
+                                        stringResource(R.string.settings_nav_bar_desc_rail)
+                                    navStyle == AppSettingsStore.NAV_STYLE_LIQUID_GLASS ->
+                                        stringResource(R.string.settings_nav_bar_desc_liquid_glass)
+                                    navStyle == AppSettingsStore.NAV_STYLE_LIQUID_GLASS_ENHANCED ->
+                                        stringResource(R.string.settings_nav_bar_desc_enhanced)
+                                    else -> null
+                                },
+                                items = navStyleOptions.map { it.second },
+                                selectedIndex = navStyleIndex,
+                                onSelectedIndexChange = { index ->
+                                    navStyleOptions.getOrNull(index)?.first?.let { style ->
+                                        AppSettingsStore.setNavStyle(ctx, style)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+                item {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
+                        Column(Modifier.padding(vertical = 4.dp)) {
+                            // 平板侧边栏：开启时平板/大窗口下导航移到侧边，关闭则保持底部导航
+                            SwitchPreference(
+                                title = stringResource(R.string.settings_side_rail),
+                                summary = stringResource(R.string.settings_side_rail_summary),
+                                checked = sideRailEnabled,
+                                onCheckedChange = { checked ->
+                                    AppSettingsStore.setSideRailEnabled(ctx, checked)
+                                },
+                            )
+                        }
+                    }
+                }
+                item {
+                    MiuixCard(modifier = Modifier.fillMaxWidth().glassShadow().glassBorder(), cornerRadius = AppComponentCornerRadius) {
                         Column(Modifier.padding(vertical = 4.dp)) {
                             SwitchPreference(
-                                title = stringResource(R.string.settings_liquid_glass_nav),
-                                checked = AppSettingsStore.navStyleState.value == AppSettingsStore.NAV_STYLE_LIQUID_GLASS,
+                                title = stringResource(R.string.settings_engine_tabs),
+                                checked = engineTabs,
                                 onCheckedChange = { checked ->
-                                    AppSettingsStore.setNavStyle(
-                                        ctx,
-                                        if (checked) AppSettingsStore.NAV_STYLE_LIQUID_GLASS else AppSettingsStore.NAV_STYLE_DEFAULT,
-                                    )
+                                    AppSettingsStore.setEngineTabsEnabled(ctx, checked)
                                 },
                             )
                         }
@@ -303,10 +392,4 @@ private fun ComposeColor.toHex(): String {
         ((green * 255f).roundToInt() shl 8) or
         (blue * 255f).roundToInt()
     return String.format("#%06X", argb and 0xFFFFFF)
-}
-
-/** 列表底部占位：避让系统导航栏。 */
-@Composable
-private fun BottomInsetSpacer() {
-    Box(Modifier.fillMaxWidth().height(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()))
 }

@@ -6,9 +6,8 @@ import com.core.engine.EnginePrefs
 import com.core.nativeplugin.NativePluginConstants
 import com.core.nativeplugin.NativePluginInstallState
 import com.core.nativeplugin.NativePluginManager
-import com.tyranor.next.R
 import com.tyranor.next.core.engine.EngineType
-import com.tyranor.next.core.i18n.AppLocaleController
+import org.json.JSONObject
 import java.io.File
 import java.util.zip.ZipInputStream
 
@@ -19,6 +18,10 @@ import java.util.zip.ZipInputStream
  * 引擎加载器（NativeLibraryLoader/OnsLibLoader/Artemis 相关）从
  * filesDir/engine_plugins/<engine>/current/arm64-v8a/ 读取 .so；
  * 此处解压 assets/nativeplugins/<engine>.zip 到该目录，无需用户手动导入 zip。
+ *
+ * 更新策略：仅按「必备 so 是否齐全」校验无法发现同名 .so 内容变化
+ * （如自研内核与宿主 Java 桥成对更新），因此额外比对已装 `pluginVersion`
+ * 与 assets 内 manifest 的 `pluginVersion`，不一致即重新解压。
  */
 object EnginePluginBootstrap {
 
@@ -29,6 +32,7 @@ object EnginePluginBootstrap {
         val engineId: String,
         val installedKey: String,
         val enabledKey: String,
+        val versionKey: String,
     )
 
     private val engines = listOf(
@@ -36,18 +40,28 @@ object EnginePluginBootstrap {
             NativePluginConstants.ENGINE_KIRIKIROID2,
             EnginePrefs.KEY_NATIVE_PLUGIN_KIRIKIROID2_INSTALLED,
             EnginePrefs.KEY_NATIVE_PLUGIN_KIRIKIROID2_ENABLED,
+            EnginePrefs.KEY_NATIVE_PLUGIN_KIRIKIROID2_VERSION,
         ),
         EngineSpec(
             NativePluginConstants.ENGINE_ONS,
             EnginePrefs.KEY_NATIVE_PLUGIN_ONS_INSTALLED,
             EnginePrefs.KEY_NATIVE_PLUGIN_ONS_ENABLED,
+            EnginePrefs.KEY_NATIVE_PLUGIN_ONS_VERSION,
         ),
         EngineSpec(
             NativePluginConstants.ENGINE_ARTEMIS,
             EnginePrefs.KEY_NATIVE_PLUGIN_ARTEMIS_INSTALLED,
             EnginePrefs.KEY_NATIVE_PLUGIN_ARTEMIS_ENABLED,
+            EnginePrefs.KEY_NATIVE_PLUGIN_ARTEMIS_VERSION,
         ),
     )
+
+    /** 启动前插件保障失败原因（P0-6）：核心层只给类型，UI 层映射本地化文案。 */
+    sealed interface Failure {
+        data class UnknownEngine(val engineId: String) : Failure
+
+        data object InstallFailed : Failure
+    }
 
     /** 幂等：仅对尚未安装的引擎执行一次复制。每次应用启动调用开销极低。 */
     @JvmStatic
@@ -60,7 +74,7 @@ object EnginePluginBootstrap {
 
     /** 启动前同步保障：对应引擎插件必须已安装、已启用且文件完整。 */
     @JvmStatic
-    fun ensureForLaunch(context: Context, engine: EngineType): String? {
+    fun ensureForLaunch(context: Context, engine: EngineType): Failure? {
         val engineId = when (engine) {
             EngineType.KIRIKIRI -> NativePluginConstants.ENGINE_KIRIKIROID2
             EngineType.ONS -> NativePluginConstants.ENGINE_ONS
@@ -70,17 +84,27 @@ object EnginePluginBootstrap {
             EngineType.RPG_MZ,
             EngineType.VN,
             EngineType.WEB_OTHER,
+            EngineType.SIGLUS,
+            EngineType.REALLIVE,
+            EngineType.AVG32,
+            EngineType.UK2,
+            EngineType.FVP,
+            EngineType.YURIS,
+            EngineType.CATSYSTEM2,
+            EngineType.PC,
             EngineType.RPGMAKER,
             EngineType.RENPY,
+            EngineType.PSP,
+            EngineType.NINTENDO_SWITCH,
             EngineType.UNKNOWN -> return null
         }
         val app = context.applicationContext
         val spec = engines.firstOrNull { it.engineId == engineId }
-            ?: return text(context, R.string.plugin_unknown_engine, engineId)
+            ?: return Failure.UnknownEngine(engineId)
         return if (provisionEngineIfNeeded(app, spec, requireEnabled = true)) {
             null
         } else {
-            text(context, R.string.plugin_install_failed)
+            Failure.InstallFailed
         }
     }
 
@@ -88,23 +112,31 @@ object EnginePluginBootstrap {
     private fun provisionEngineIfNeeded(app: Context, spec: EngineSpec, requireEnabled: Boolean): Boolean {
         val prefs = app.getSharedPreferences(EnginePrefs.APP_PREFS, Context.MODE_PRIVATE)
         val state = installState(app, spec.engineId)
-        if (state == NativePluginInstallState.INSTALLED_ENABLED) {
-            markInstalled(prefs, spec, enabled = true)
+        val bundledVersion = bundledPluginVersion(app, spec.engineId)
+        val installedVersion = prefs.getInt(spec.versionKey, 0)
+        // 已装插件内容过期（同名 .so 已更新但校验看不出来）时也必须重新解压
+        val outdated = state != NativePluginInstallState.NOT_INSTALLED &&
+            bundledVersion != null && bundledVersion != installedVersion
+        if (state == NativePluginInstallState.INSTALLED_ENABLED && !outdated) {
+            markInstalled(prefs, spec, enabled = true, version = bundledVersion)
             return true
         }
-        if (!requireEnabled && state == NativePluginInstallState.INSTALLED_DISABLED) {
-            markInstalled(prefs, spec, enabled = false)
+        if (!requireEnabled && state == NativePluginInstallState.INSTALLED_DISABLED && !outdated) {
+            markInstalled(prefs, spec, enabled = false, version = bundledVersion)
             return true
         }
-        if (requireEnabled && state == NativePluginInstallState.INSTALLED_DISABLED) {
-            markInstalled(prefs, spec, enabled = true)
+        if (requireEnabled && state == NativePluginInstallState.INSTALLED_DISABLED && !outdated) {
+            markInstalled(prefs, spec, enabled = true, version = bundledVersion)
             return isReady(app, spec.engineId)
+        }
+        if (outdated) {
+            android.util.Log.i(TAG, "re-provision ${spec.engineId}: version $installedVersion -> $bundledVersion")
         }
         return try {
             val target = currentDirFor(app, spec.engineId)
             if (target.exists()) target.deleteRecursively()
             extractPluginZip(app, spec.engineId, target)
-            markInstalled(prefs, spec, enabled = true)
+            markInstalled(prefs, spec, enabled = true, version = bundledVersion)
             val ready = isReady(app, spec.engineId)
             if (ready) {
                 android.util.Log.i(TAG, "provisioned native plugin: ${spec.engineId}")
@@ -117,6 +149,27 @@ object EnginePluginBootstrap {
             false
         }
     }
+
+    /** assets 内插件 zip 的 manifest.pluginVersion；缺失/读取失败返回 null（按不判定过期处理）。 */
+    private fun bundledPluginVersion(app: Context, engineId: String): Int? =
+        runCatching {
+            var version: Int? = null
+            app.assets.open("$ASSET_PLUGIN_DIR/$engineId.zip").use { asset ->
+                ZipInputStream(asset.buffered()).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (entry.name == "manifest.json") {
+                            val text = zip.readBytes().toString(Charsets.UTF_8)
+                            version = JSONObject(text).optInt("pluginVersion", 0)
+                            break
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+            version
+        }.getOrNull()
 
     private fun isReady(app: Context, engineId: String): Boolean {
         return installState(app, engineId) == NativePluginInstallState.INSTALLED_ENABLED
@@ -132,10 +185,13 @@ object EnginePluginBootstrap {
         return state
     }
 
-    private fun markInstalled(prefs: SharedPreferences, spec: EngineSpec, enabled: Boolean) {
+    private fun markInstalled(prefs: SharedPreferences, spec: EngineSpec, enabled: Boolean, version: Int?) {
         prefs.edit()
             .putBoolean(spec.installedKey, true)
             .putBoolean(spec.enabledKey, enabled)
+            .apply {
+                if (version != null) putInt(spec.versionKey, version)
+            }
             .apply()
     }
 
@@ -175,7 +231,4 @@ object EnginePluginBootstrap {
             "native plugin extraction produced no directory: $engineId"
         }
     }
-
-    private fun text(context: Context, id: Int, vararg args: Any): String =
-        AppLocaleController.wrap(context).getString(id, *args)
 }

@@ -2,7 +2,10 @@ package com.tyranor.next.ui.common
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Indication
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,13 +13,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,8 +31,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.tyranor.next.R
 import com.tyranor.next.theme.AppThemeColors
+import com.tyranor.next.theme.DialogItemSurface
 import com.tyranor.next.theme.NavWhite
 import com.tyranor.next.theme.TextColor
+import com.tyranor.next.theme.glassBorder
+import com.tyranor.next.theme.AppComponentShape
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -38,10 +44,10 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 统一规范（详见 AGENT.md「功能跳转条目统一规范」）：
  * - 所有「功能跳转列」（点击后进入/跳转/打开下一级的条目，如封面来源列表、群聊/频道项等）
  *   必须使用本组件，禁止用手写 Row/Column 拼装、禁止混用 Material 的 ListItem 等。
- * - 排版：圆角 8dp + 背景 [containerColor]（默认 [NavWhite]）+ 内边距（纵向 12dp / 横向 16dp）+ 左侧图标 24dp + 右侧箭头，
+ * - 排版：圆角统一用 [com.tyranor.next.theme.AppComponentShape]（默认 8dp / 玻璃风格 32dp）+ 背景 [containerColor]（默认 [NavWhite]）+ 内边距（纵向 12dp / 横向 16dp）+ 左侧图标 24dp + 右侧箭头，
  *   标题用 [TextColor]、摘要用半透明辅助色；进入跳转的 icon 一律 `KeyboardArrowRight`。
- * - 背景色约定：页面上条目默认 [NavWhite]（页面背景 PageGrey 灰底白卡）；弹窗内条目传 `PageGrey`（弹窗背景 NavWhite 白底灰卡），
- *   与弹窗背景形成反色反差。两者互为对偶，且「色调切换」时同步互换，层次关系不变。
+ * - 背景色约定：页面上条目默认 [NavWhite]（页面背景 PageGrey 灰底白卡）；弹窗内条目传 [DialogItemSurface]，
+ *   与弹窗背景形成层次反差（AGENT.md 界面规范，勿回退 PageGrey——玻璃外观下 PageGrey 透明会丢失卡片层次）。
  * - 「色调切换」遵循统一规范：背景引用 `theme/Color.kt` 常量，前景取 [TextColor]，
  *   不依赖 `colorScheme.surface*`，保证弹窗作用域内外一致。
  *
@@ -50,7 +56,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * @param modifier 外部修饰
  * @param summary 可选摘要
  * @param leadingIcon 左侧图标 drawable；null 时使用默认占位图标 [DEFAULT_LEADING_ICON]
- * @param containerColor 条目容器背景色；默认 [NavWhite]（页面灰底上的白卡），弹窗内应传 `PageGrey` 与白底弹窗形成反差
+ * @param showLeadingIcon 是否展示左侧图标；纯动作条目（如存档导出/导入/删除）可传 false 隐藏图标位
+ * @param containerColor 条目容器背景色；默认 [NavWhite]（页面灰底上的白卡），弹窗内应传 [DialogItemSurface]
  * @param showArrow 是否显示右侧跳转箭头；「进入下一级」的跳转条目保持 true，「执行动作」条目传 false
  * @param leadingIconTint 显式覆盖左侧图标颜色（如主题色 [MaterialTheme.colorScheme.primary] / 危险色 error）；
  *   null 时保持默认行为（深色染白、浅色用原图）
@@ -62,37 +69,48 @@ fun AppNavItem(
     modifier: Modifier = Modifier,
     summary: String? = null,
     @DrawableRes leadingIcon: Int? = null,
+    showLeadingIcon: Boolean = true,
     containerColor: Color = NavWhite,
     verticalPadding: Dp = 12.dp,
     showArrow: Boolean = true,
     leadingIconTint: Color? = null,
     titleColor: Color? = null,
+    indication: Indication? = LocalIndication.current,
     onClick: (() -> Unit)? = null,
 ) {
     val enabled = onClick != null
     val contentAlpha = if (enabled) 1f else 0.4f
+    val interactionSource = remember { MutableInteractionSource() }
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(enabled = enabled, onClick = { onClick?.invoke() })
+            .clip(AppComponentShape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = indication,
+                enabled = enabled,
+                onClick = { onClick?.invoke() },
+            )
             .background(containerColor)
+            .glassBorder()
             .padding(horizontal = 16.dp, vertical = verticalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Image(
-            painter = painterResource(leadingIcon ?: DEFAULT_LEADING_ICON),
-            contentDescription = null,
-            modifier = Modifier.size(24.dp),
-            // 显式 tint 优先；否则深色模式下染白，保持低亮度背景上的可读性
-            colorFilter = when {
-                leadingIconTint != null -> ColorFilter.tint(leadingIconTint.copy(alpha = contentAlpha))
-                AppThemeColors.isDark -> ColorFilter.tint(Color.White.copy(alpha = contentAlpha))
-                else -> null
-            },
-        )
+        if (showLeadingIcon) {
+            Image(
+                painter = painterResource(leadingIcon ?: DEFAULT_LEADING_ICON),
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                // 显式 tint 优先；否则深色模式下染白，保持低亮度背景上的可读性
+                colorFilter = when {
+                    leadingIconTint != null -> ColorFilter.tint(leadingIconTint.copy(alpha = contentAlpha))
+                    AppThemeColors.isDark -> ColorFilter.tint(Color.White.copy(alpha = contentAlpha))
+                    else -> null
+                },
+            )
+        }
         Column(
-            modifier = Modifier.weight(1f).padding(start = 12.dp),
+            modifier = Modifier.weight(1f).padding(start = if (showLeadingIcon) 12.dp else 0.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(

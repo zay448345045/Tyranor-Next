@@ -111,6 +111,14 @@ internal fun artVersionOptions(): List<Pair<String, String>> = listOf(
     EngineSettingsStore.ART_ENGINE_V3 to "v3（Tyranor/Rev.3201/emote）",
     EngineSettingsStore.ART_ENGINE_V4 to "V1（TyranorNext/Rev.2958）",
     EngineSettingsStore.ART_ENGINE_V5 to "V3（TyranorNext/Rev.3288）",
+    EngineSettingsStore.ART_ENGINE_V6 to "V4（TyranorNext/Rev.3294/emote）",
+)
+
+/** Artemis 内核选项：官方多 revision 运行库 / 自研 clean-room 兼容内核（单库无版本）。 */
+@Composable
+internal fun artKernelOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.ART_KERNEL_OFFICIAL to stringResource(R.string.engine_option_art_kernel_official),
+    EngineSettingsStore.ART_KERNEL_CLEAN to stringResource(R.string.engine_option_art_kernel_clean),
 )
 
 @Composable
@@ -118,6 +126,38 @@ internal fun renpyVersionOptions(): List<Pair<String, String>> = listOf(
     EngineSettingsStore.RENPY_AUTO to stringResource(R.string.common_auto),
     EngineSettingsStore.RENPY_85 to "8.5",
     EngineSettingsStore.RENPY_77 to "7.7.1",
+)
+
+/** Siglus 游戏语言（引擎 GET_LANGUAGE 返回值；auto 保持引擎默认 JP）。 */
+@Composable
+internal fun siglusLanguageOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.SIGLUS_LANGUAGE_AUTO to stringResource(R.string.engine_settings_siglus_language_auto),
+    EngineSettingsStore.SIGLUS_LANGUAGE_JP to stringResource(R.string.engine_settings_siglus_language_value_jp),
+    EngineSettingsStore.SIGLUS_LANGUAGE_EN to stringResource(R.string.engine_settings_siglus_language_value_en),
+    EngineSettingsStore.SIGLUS_LANGUAGE_ZH to stringResource(R.string.engine_settings_siglus_language_value_zh),
+    EngineSettingsStore.SIGLUS_LANGUAGE_ZHTW to stringResource(R.string.engine_settings_siglus_language_value_zhtw),
+    EngineSettingsStore.SIGLUS_LANGUAGE_DE to stringResource(R.string.engine_settings_siglus_language_value_de),
+    EngineSettingsStore.SIGLUS_LANGUAGE_ES to stringResource(R.string.engine_settings_siglus_language_value_es),
+    EngineSettingsStore.SIGLUS_LANGUAGE_FR to stringResource(R.string.engine_settings_siglus_language_value_fr),
+    EngineSettingsStore.SIGLUS_LANGUAGE_ID to stringResource(R.string.engine_settings_siglus_language_value_id),
+)
+
+/** FVP 文本编码（创建引擎时固定；改动后需重启本局）。 */
+@Composable
+internal fun fbNlsOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.FB_NLS_AUTO to stringResource(R.string.engine_settings_fb_nls_auto),
+    EngineSettingsStore.FB_NLS_SJIS to stringResource(R.string.engine_settings_fb_nls_sjis),
+    EngineSettingsStore.FB_NLS_GBK to stringResource(R.string.engine_settings_fb_nls_gbk),
+    EngineSettingsStore.FB_NLS_BIG5 to stringResource(R.string.engine_settings_fb_nls_big5),
+    EngineSettingsStore.FB_NLS_UTF8 to stringResource(R.string.engine_settings_fb_nls_utf8),
+    EngineSettingsStore.FB_NLS_KOREAN to stringResource(R.string.engine_settings_fb_nls_korean),
+)
+
+@Composable
+internal fun fvpNlsOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.FVP_NLS_SJIS to stringResource(R.string.engine_settings_fvp_nls_sjis),
+    EngineSettingsStore.FVP_NLS_GBK to stringResource(R.string.engine_settings_fvp_nls_gbk),
+    EngineSettingsStore.FVP_NLS_UTF8 to stringResource(R.string.engine_settings_fvp_nls_utf8),
 )
 
 @Composable
@@ -203,7 +243,116 @@ internal fun onsEncodingOptionsMap(): Map<String, String> = onsEncodingOptions()
 internal fun artVersionOptionsMap(): Map<String, String> = artVersionOptions().toMap()
 
 @Composable
+internal fun artKernelOptionsMap(): Map<String, String> = artKernelOptions().toMap()
+
+@Composable
 internal fun renpyVersionOptionsMap(): Map<String, String> = renpyVersionOptions().toMap()
+
+@Composable
+internal fun siglusLanguageOptionsMap(): Map<String, String> = siglusLanguageOptions().toMap()
+
+@Composable
+internal fun fvpNlsOptionsMap(): Map<String, String> = fvpNlsOptions().toMap()
+
+/** RealLive / AVG32 / UK2 文本编码（创建引擎时固定）。 */
+@Composable
+internal fun fbNlsOptionsMap(): Map<String, String> = fbNlsOptions().toMap()
+
+// ───────────────────────── PPSSPP 外置模拟器 ─────────────────────────
+
+/** PPSSPP 版本：标准版 / 黄金版（跳转 PSP 游戏时选择包名）。 */
+@Composable
+internal fun ppssppVersionOptions(): List<Pair<String, String>> = listOf(
+    EngineSettingsStore.PPSSPP_VERSION_STANDARD to stringResource(R.string.engine_settings_ppsspp_version_standard),
+    EngineSettingsStore.PPSSPP_VERSION_GOLD to stringResource(R.string.engine_settings_ppsspp_version_gold),
+)
+
+@Composable
+internal fun ppssppVersionOptionsMap(): Map<String, String> = ppssppVersionOptions().toMap()
+
+// ───────────────────────── Winlator 外置启动 ─────────────────────────
+
+/** 空串统一下发语义：不下发该参数，跟随 Winlator 容器/快捷方式配置。 */
+@Composable
+internal fun winlatorGraphicsDriverOptions(): List<Pair<String, String>> =
+    listOf("" to stringResource(R.string.engine_settings_winlator_follow_container)) +
+        EngineSettingsStore.WINLATOR_GRAPHICS_DRIVERS.map { it to winlatorGraphicsDriverLabel(it) }
+
+/** 图形驱动组合标签：Vulkan 驱动 + OpenGL 驱动（对齐 Winlator 容器设置两项下拉，专名保留原文）。 */
+internal fun winlatorGraphicsDriverLabel(driver: String): String = when (driver) {
+    "turnip,zink" -> "Turnip + Zink"
+    "turnip,virgl" -> "Turnip + VirGL"
+    "turnip,gladio" -> "Turnip + Gladio"
+    "vortek,zink" -> "Vortek + Zink"
+    "vortek,virgl" -> "Vortek + VirGL"
+    "vortek,gladio" -> "Vortek + Gladio"
+    else -> driver
+}
+
+@Composable
+internal fun winlatorLcAllOptions(): List<Pair<String, String>> =
+    listOf("" to stringResource(R.string.engine_settings_winlator_follow_container)) +
+        EngineSettingsStore.WINLATOR_LOCALES.map { it to it }
+
+@Composable
+internal fun winlatorTimezoneOptions(): List<Pair<String, String>> =
+    listOf("" to stringResource(R.string.engine_settings_winlator_follow_container)) +
+        EngineSettingsStore.WINLATOR_TIMEZONES.map { it to it }
+
+@Composable
+internal fun winlatorDxWrapperOptions(): List<Pair<String, String>> =
+    EngineSettingsStore.WINLATOR_DXWRAPPERS.map { v ->
+        v to v.ifBlank { stringResource(R.string.engine_settings_winlator_follow_container) }
+    }
+
+@Composable
+internal fun winlatorBox64PresetOptions(): List<Pair<String, String>> =
+    EngineSettingsStore.WINLATOR_BOX64_PRESETS.map { v ->
+        v to v.ifBlank { stringResource(R.string.engine_settings_winlator_follow_container) }
+    }
+
+/** 分辨率固定档位（无自定义输入）：`宽x高 (宽高比)`，宽度按 3 位数字分档便于扫读。 */
+@Composable
+internal fun winlatorScreenSizeOptions(): List<Pair<String, String>> =
+    listOf("" to stringResource(R.string.engine_settings_winlator_follow_container)) +
+        EngineSettingsStore.WINLATOR_SCREEN_SIZES.map { it to winlatorScreenSizeLabel(it) }
+
+internal fun winlatorScreenSizeLabel(size: String): String = when (size) {
+    "640x360" -> "640x360 (16:9)"
+    "640x480" -> "640x480 (4:3)"
+    "800x600" -> "800x600 (4:3)"
+    "854x480" -> "854x480 (16:9)"
+    "960x544" -> "960x544 (16:9)"
+    "1024x768" -> "1024x768 (4:3)"
+    "1280x720" -> "1280x720 (16:9)"
+    "1280x800" -> "1280x800 (16:10)"
+    "1280x1024" -> "1280x1024 (5:4)"
+    "1366x768" -> "1366x768 (16:9)"
+    "1440x900" -> "1440x900 (16:10)"
+    "1600x900" -> "1600x900 (16:9)"
+    "1920x1080" -> "1920x1080 (16:9)"
+    else -> size
+}
+
+@Composable
+internal fun winlatorGraphicsDriverOptionsMap(): Map<String, String> =
+    winlatorGraphicsDriverOptions().toMap()
+
+@Composable
+internal fun winlatorDxWrapperOptionsMap(): Map<String, String> = winlatorDxWrapperOptions().toMap()
+
+@Composable
+internal fun winlatorBox64PresetOptionsMap(): Map<String, String> =
+    winlatorBox64PresetOptions().toMap()
+
+@Composable
+internal fun winlatorScreenSizeOptionsMap(): Map<String, String> = winlatorScreenSizeOptions().toMap()
+
+@Composable
+internal fun winlatorLcAllOptionsMap(): Map<String, String> = winlatorLcAllOptions().toMap()
+
+@Composable
+internal fun winlatorTimezoneOptionsMap(): Map<String, String> = winlatorTimezoneOptions().toMap()
 
 @Composable
 internal fun artPatchOptionsMap(): Map<String, String> = artPatchOptions().toMap()
@@ -239,3 +388,40 @@ internal fun artSurfaceCacheOptionsMap(): Map<String, String> = artSurfaceCacheO
 
 @Composable
 internal fun artFontCacheOptionsMap(): Map<String, String> = artFontCacheOptions().toMap()
+
+// ───────────────────────── RPG Maker RGSS 外置模块 ─────────────────────────
+
+/** 窗口尺寸全为尺寸字面量，无需本地化。 */
+@Composable
+internal fun rpgWindowSizeOptions(): List<Pair<String, String>> =
+    EngineSettingsStore.RPG_WINDOW_SIZES.map { it to it }
+
+/** 加速倍率 1..9（显示为 Nx，数值本身无语言差异）。 */
+@Composable
+internal fun rpgSpeedUpOptions(): List<Pair<String, String>> =
+    EngineSettingsStore.RPG_SPEED_UPS.map { it to "${it}x" }
+
+/** 字体缩放档位（0.25..2.00）。 */
+@Composable
+internal fun rpgFontScaleOptions(): List<Pair<String, String>> =
+    EngineSettingsStore.RPG_FONT_SCALES.map { it to it }
+
+/** 竖屏对齐（插件 MKXPConfiguration 的 verticalScreenAlign 取值）。 */
+@Composable
+internal fun rpgVerticalAlignOptions(): List<Pair<String, String>> = listOf(
+    "top" to stringResource(R.string.engine_settings_rpgm_valign_top),
+    "top-center" to stringResource(R.string.engine_settings_rpgm_valign_top_center),
+    "center" to stringResource(R.string.engine_settings_rpgm_valign_center),
+)
+
+@Composable
+internal fun rpgWindowSizeOptionsMap(): Map<String, String> = rpgWindowSizeOptions().toMap()
+
+@Composable
+internal fun rpgSpeedUpOptionsMap(): Map<String, String> = rpgSpeedUpOptions().toMap()
+
+@Composable
+internal fun rpgFontScaleOptionsMap(): Map<String, String> = rpgFontScaleOptions().toMap()
+
+@Composable
+internal fun rpgVerticalAlignOptionsMap(): Map<String, String> = rpgVerticalAlignOptions().toMap()

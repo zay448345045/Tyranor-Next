@@ -34,14 +34,54 @@ internal object GameOverridePartitions {
     const val KEY_VCURSOR_SCALE = "vcursor_scale"
     const val KEY_MENU_HANDLER_OPA = "menu_handler_opa"
     const val KEY_ART_VERSION = "art_engine_version"
+    const val KEY_ART_KERNEL = "artemis_kernel"
     const val KEY_ART_ROTATE = "art_rotate_screen"
     const val KEY_ART_PATCH = "art_auto_patch"
     const val KEY_RPG_MAKER_MOD_ENABLED = "rpg_maker_mod_enabled"
     const val KEY_RPG_LEGACY_RENDERER = "rpg_legacy_renderer"
+    const val KEY_RPG_SAVE_INTEROP = "rpg_save_interop"
     const val KEY_RPG_MV_VERSION = "rpg_mv_engine_version"
     const val KEY_RPG_MZ_VERSION = "rpg_mz_engine_version"
+    // RPG Maker RGSS 外置模块覆盖键（与 PerGameSettingsStore.F_RPG_* 字面量锚定）
+    const val KEY_RPG_USE_RUBY18 = "rpg_use_ruby18"
+    const val KEY_RPG_DEBUG = "rpg_debug"
+    const val KEY_RPG_SMOOTH_SCALING = "rpg_smooth_scaling"
+    const val KEY_RPG_VSYNC = "rpg_vsync"
+    const val KEY_RPG_FRAME_SKIP = "rpg_frame_skip"
+    const val KEY_RPG_SOLID_FONTS = "rpg_solid_fonts"
+    const val KEY_RPG_PATH_CACHE = "rpg_path_cache"
+    const val KEY_RPG_PREBUILT_PATH_CACHE = "rpg_prebuilt_path_cache"
+    const val KEY_RPG_FAST_PATH_ENUM = "rpg_fast_path_enum"
+    const val KEY_RPG_COPY_TEXT = "rpg_copy_text"
+    const val KEY_RPG_CHEATS = "rpg_cheats"
+    const val KEY_RPG_USE_CJK_FONT = "rpg_use_cjk_font"
+    const val KEY_RPG_ENABLE_POSTLOAD_SCRIPTS = "rpg_enable_postload_scripts"
+    const val KEY_RPG_CUSTOM_FONT = "rpg_custom_font"
+    const val KEY_RPG_VERTICAL_SCREEN_ALIGN = "rpg_vertical_screen_align"
+    const val KEY_RPG_WINDOW_SIZE = "rpg_window_size"
+    const val KEY_RPG_SPEED_UP = "rpg_speed_up"
+    const val KEY_RPG_FONT_SCALE = "rpg_font_scale"
     const val KEY_TY_SCOPED = "ty_scoped"
     const val KEY_RENPY_VERSION = "renpy_engine_version"
+    // Siglus 无独立分区：语言覆盖随 tyrano 分区持久化（与 RPG Maker 会话键同策略）
+    const val KEY_SIGLUS_LANGUAGE = "siglus_language"
+    // framebuffer 引擎（RealLive / AVG32 / UK2）无独立分区：文本编码覆盖随 tyrano 分区持久化
+    const val KEY_FB_NLS = "fb_nls"
+    // FVP 无独立分区：编码/字体开关覆盖同样随 tyrano 分区持久化
+    const val KEY_FVP_NLS = "fvp_nls"
+    const val KEY_FVP_SYSTEM_FONT = "fvp_system_font"
+    const val KEY_FVP_TEXT_HIDPI = "fvp_text_hidpi"
+    const val KEY_FVP_FONT = "fvp_font"
+    // Ren'Py 外置模块配置覆盖键（与 PerGameSettingsStore.F_RENPY_* 字面量锚定）
+    const val KEY_RENPY_CHEATS = "renpy_cheats"
+    const val KEY_RENPY_HW_VIDEO = "renpy_hw_video"
+    const val KEY_RENPY_AUTOSAVE = "renpy_autosave"
+    const val KEY_RENPY_PHONE_SMALL_VARIANT = "renpy_phonesmallvariant"
+    const val KEY_RENPY_VSYNC = "renpy_vsync"
+    const val KEY_RENPY_LESS_MEMORY = "renpy_less_memory"
+    const val KEY_RENPY_LESS_UPDATES = "renpy_less_updates"
+    const val KEY_RENPY_DONT_USE_GL2 = "renpy_dont_use_gl2"
+    const val KEY_RENPY_RECOMPILE = "renpy_recompile"
     const val ONS_OBJECT_KEY = "ons"
 
     val KR_KEYS: Set<String> = setOf(
@@ -51,15 +91,30 @@ internal object GameOverridePartitions {
         KEY_OGL_ACCURATE_RENDER, KEY_FPS_LIMIT, KEY_VCURSOR_SCALE, KEY_MENU_HANDLER_OPA,
         KEY_SKIP_STARTUP_DIALOGS,
     )
-    val ARTEMIS_KEYS: Set<String> = setOf(KEY_ART_VERSION, KEY_ART_ROTATE, KEY_ART_PATCH)
-    // RPG Maker 会话键（legacy 渲染、MV/MZ 运行时版本）与 tyrano 共用分区：
+    val ARTEMIS_KEYS: Set<String> = setOf(KEY_ART_VERSION, KEY_ART_KERNEL, KEY_ART_ROTATE, KEY_ART_PATCH)
+    // RPG Maker 会话键（legacy 渲染、MV/MZ 运行时版本、RGSS 外置模块配置）与 tyrano 共用分区：
     // v0 宿主与 v1/v2 宿主的逐游戏覆盖都在这一条 blob 里，显式建模，
     // 不依赖“未识别键兜底归入 tyrano”的 else 路径，防止未来收紧分区时丢键
     val TYRANO_KEYS: Set<String> = setOf(
-        KEY_TY_SCOPED, KEY_RPG_MAKER_MOD_ENABLED,
+        KEY_TY_SCOPED, KEY_RPG_MAKER_MOD_ENABLED, KEY_RPG_SAVE_INTEROP,
         KEY_RPG_LEGACY_RENDERER, KEY_RPG_MV_VERSION, KEY_RPG_MZ_VERSION,
+        KEY_RPG_USE_RUBY18, KEY_RPG_DEBUG, KEY_RPG_SMOOTH_SCALING, KEY_RPG_VSYNC,
+        KEY_RPG_FRAME_SKIP, KEY_RPG_SOLID_FONTS, KEY_RPG_PATH_CACHE,
+        KEY_RPG_PREBUILT_PATH_CACHE, KEY_RPG_FAST_PATH_ENUM, KEY_RPG_COPY_TEXT,
+        KEY_RPG_CHEATS, KEY_RPG_USE_CJK_FONT, KEY_RPG_ENABLE_POSTLOAD_SCRIPTS,
+        KEY_RPG_CUSTOM_FONT, KEY_RPG_VERTICAL_SCREEN_ALIGN, KEY_RPG_WINDOW_SIZE,
+        KEY_RPG_SPEED_UP, KEY_RPG_FONT_SCALE,
+        KEY_SIGLUS_LANGUAGE,
+        KEY_FB_NLS,
+        KEY_FVP_NLS, KEY_FVP_SYSTEM_FONT, KEY_FVP_TEXT_HIDPI, KEY_FVP_FONT,
     )
-    val RENPY_KEYS: Set<String> = setOf(KEY_RENPY_VERSION)
+    // Ren'Py 分区：版本选择 + 外置模块配置，显式建模防止未来收紧分区时丢键
+    val RENPY_KEYS: Set<String> = setOf(
+        KEY_RENPY_VERSION,
+        KEY_RENPY_CHEATS, KEY_RENPY_HW_VIDEO, KEY_RENPY_AUTOSAVE,
+        KEY_RENPY_PHONE_SMALL_VARIANT, KEY_RENPY_VSYNC, KEY_RENPY_LESS_MEMORY,
+        KEY_RENPY_LESS_UPDATES, KEY_RENPY_DONT_USE_GL2, KEY_RENPY_RECOMPILE,
+    )
     val TOUCHPAD_KEYS: Set<String> = setOf(TOUCH_PAD_CONFIG_KEY, TOUCH_PAD_PRESETS_KEY)
 
     /** 整条 blob → 分区行；updatedAt 由调用方给出。 */

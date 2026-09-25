@@ -33,8 +33,10 @@ import androidx.compose.ui.unit.dp
  * 禁止任何页面自行手写该结构。
  *
  * @param title 标题文案
- * @param background 不透明背景色；默认 Material 页面背景色，Miuix 风格页面传 `MiuixTheme.colorScheme.background`，
- *   需要「色调切换」参与取色的页面传 `PageGrey`（见 AGENT.md 容器色约定）
+ * @param background 背景色；默认 Material 页面背景色，Miuix 风格页面传 `MiuixTheme.colorScheme.background`，
+ *   需要「色调切换」参与取色的页面传 `PageGrey`（见 AGENT.md 容器色约定）。玻璃外观风格下页面背景为
+ *   透明，顶栏随之透明（露出渐变/环境光）；此时页面内容必须整体垫在顶栏下方（用持久 padding，而非
+ *   滚动 contentPadding），否则滚动内容会从顶栏下方穿过与标题重叠。
  * @param contentColor 标题前景色；默认 `colorScheme.onBackground`，与 [background] 配套传入
  * @param underTitle 标题行下方的附加内容（可选，如游戏页折叠的搜索框）；置于状态栏背景延伸区内
  * @param trailing 标题右侧的图标/内容（可选，必须用 [TopBarIcon] 等公共组件）

@@ -36,6 +36,7 @@ object EngineSettingsStore {
 
     // Artemis 应用级默认
     const val KEY_ARTEMIS_ENGINE_VERSION = "artemis_engine_version"
+    const val KEY_ARTEMIS_KERNEL = "artemis_kernel"
     const val KEY_ARTEMIS_ROTATE_SCREEN = "artemis_rotate_screen"
     const val KEY_ARTEMIS_AUTO_PATCH = "artemis_auto_patch"
     const val KEY_ARTEMIS_RESOLUTION = "artemis_resolution"
@@ -47,13 +48,71 @@ object EngineSettingsStore {
     // Ren'Py 应用级默认（外置模块版本选择）
     const val KEY_RENPY_ENGINE_VERSION = "renpy_engine_version"
 
+    // Siglus 应用级默认（游戏语言；引擎启动时经 SIGLUS_LANGUAGE → GET_LANGUAGE 生效）
+    const val KEY_SIGLUS_LANGUAGE = "siglus_language"
+
+    // PPSSPP 外置模拟器版本（标准版 / 黄金版；跳转 PSP 游戏时按此选择包名）
+    const val KEY_PPSSPP_VERSION = "ppsspp_version"
+
+    // framebuffer 引擎（RealLive / AVG32 / UK2）应用级默认（文本编码）
+    const val KEY_FB_NLS = "fb_nls"
+
+    // FVP（rfvp）应用级默认（文本编码 / 系统字体回退 / 文本高分辨率渲染 / 自定义字体）
+    const val KEY_FVP_NLS = "fvp_nls"
+    const val KEY_FVP_SYSTEM_FONT = "fvp_system_font"
+    const val KEY_FVP_TEXT_HIDPI = "fvp_text_hidpi"
+    const val KEY_FVP_FONT = "fvp_font"
+
+    // Winlator 外置启动（YU-RIS / CatSystem2 / PC 经 Winlator 跳转时的下发参数）
+    const val KEY_WINLATOR_CONTAINER_ID = "winlator_container_id"
+    const val KEY_WINLATOR_CONTAINER_NAME = "winlator_container_name"
+    const val KEY_WINLATOR_GRAPHICS_DRIVER = "winlator_graphics_driver"
+    const val KEY_WINLATOR_DXWRAPPER = "winlator_dxwrapper"
+    const val KEY_WINLATOR_SCREEN_SIZE = "winlator_screen_size"
+    const val KEY_WINLATOR_LC_ALL = "winlator_lc_all"
+    const val KEY_WINLATOR_TZ = "winlator_tz"
+    const val KEY_WINLATOR_BOX64_PRESET = "winlator_box64_preset"
+    const val KEY_WINLATOR_SAVE = "winlator_save"
+
+    // Ren'Py 外置模块（settings extra 的 renpy 节；cheats 发 app 节，键名与 RenPyConfigurationParser 一致）
+    const val KEY_RENPY_CHEATS = "renpy_cheats"
+    const val KEY_RENPY_HW_VIDEO = "renpy_hw_video"
+    const val KEY_RENPY_AUTOSAVE = "renpy_autosave"
+    const val KEY_RENPY_PHONE_SMALL_VARIANT = "renpy_phonesmallvariant"
+    const val KEY_RENPY_VSYNC = "renpy_vsync"
+    const val KEY_RENPY_LESS_MEMORY = "renpy_less_memory"
+    const val KEY_RENPY_LESS_UPDATES = "renpy_less_updates"
+    const val KEY_RENPY_DONT_USE_GL2 = "renpy_dont_use_gl2"
+    const val KEY_RENPY_RECOMPILE = "renpy_recompile"
+
     // Tyrano 与 RPG Maker Web 共用同一套 WebView 宿主设置；启动链路按同一键读取。
     const val KEY_TYRANO_EXTERNAL_NETWORK = "tyrano_external_network"
     const val KEY_TYRANO_SCOPED_SAVE_DIR = "tyrano_scoped_save_dir"
     const val KEY_RPG_MAKER_MOD_ENABLED = "rpg_maker_mod_enabled"
     const val KEY_RPG_LEGACY_RENDERER = "rpg_legacy_renderer"
+    const val KEY_RPG_SAVE_INTEROP = "rpg_save_interop"
     const val KEY_RPG_MV_ENGINE_VERSION = "rpg_mv_engine_version"
     const val KEY_RPG_MZ_ENGINE_VERSION = "rpg_mz_engine_version"
+
+    // RPG Maker RGSS 外置模块（settings extra 的 rpg 节，键名与 RPGM 插件 MKXPConfigurationParser 一致）
+    const val KEY_RPG_USE_RUBY18 = "rpg_use_ruby18"
+    const val KEY_RPG_DEBUG = "rpg_debug"
+    const val KEY_RPG_SMOOTH_SCALING = "rpg_smooth_scaling"
+    const val KEY_RPG_VSYNC = "rpg_vsync"
+    const val KEY_RPG_FRAME_SKIP = "rpg_frame_skip"
+    const val KEY_RPG_SOLID_FONTS = "rpg_solid_fonts"
+    const val KEY_RPG_PATH_CACHE = "rpg_path_cache"
+    const val KEY_RPG_PREBUILT_PATH_CACHE = "rpg_prebuilt_path_cache"
+    const val KEY_RPG_FAST_PATH_ENUM = "rpg_fast_path_enum"
+    const val KEY_RPG_COPY_TEXT = "rpg_copy_text"
+    const val KEY_RPG_CHEATS = "rpg_cheats"
+    const val KEY_RPG_USE_CJK_FONT = "rpg_use_cjk_font"
+    const val KEY_RPG_ENABLE_POSTLOAD_SCRIPTS = "rpg_enable_postload_scripts"
+    const val KEY_RPG_CUSTOM_FONT = "rpg_custom_font"
+    const val KEY_RPG_VERTICAL_SCREEN_ALIGN = "rpg_vertical_screen_align"
+    const val KEY_RPG_WINDOW_SIZE = "rpg_window_size"
+    const val KEY_RPG_SPEED_UP = "rpg_speed_up"
+    const val KEY_RPG_FONT_SCALE = "rpg_font_scale"
 
     // 取值常量
     const val KR_AUTO = "auto"
@@ -88,11 +147,6 @@ object EngineSettingsStore {
     // 与 libgame.so 内 IndividualConfigManager 读取的键一致，键名不可改。
     const val ENGINE_VCURSOR_SCALE = "vcursor_scale"
     const val ENGINE_MENU_HANDLER_OPA = "menu_handler_opa"
-    // 供 krkr_engine_prefs JSON 写入引擎 XML 时的键名映射（prefs 键 → 引擎 Item 键）
-    private val KR_ENGINE_PREF_KEY_MAP = mapOf(
-        KEY_KR_VCURSOR_SCALE to ENGINE_VCURSOR_SCALE,
-        KEY_KR_MENU_HANDLER_OPA to ENGINE_MENU_HANDLER_OPA,
-    )
     // 虚拟鼠标缩放比（0.01..1.50，引擎默认 1.00；0.50 与原版 Ty 一致，两位小数）
     val KR_VCURSOR_SCALE_MIN = 0.01f
     val KR_VCURSOR_SCALE_MAX = 1.50f
@@ -111,11 +165,16 @@ object EngineSettingsStore {
     const val ART_ENGINE_V3 = "3"
     const val ART_ENGINE_V4 = "4"
     const val ART_ENGINE_V5 = "5"
+    const val ART_ENGINE_V6 = "6"
+    /** Artemis 内核：官方多 revision 运行库 / 自研 clean-room 兼容内核。 */
+    const val ART_KERNEL_OFFICIAL = "official"
+    const val ART_KERNEL_CLEAN = "clean"
+    val ART_KERNELS = setOf(ART_KERNEL_OFFICIAL, ART_KERNEL_CLEAN)
     const val AUTO_PATCH_ASK = "ask"
     const val AUTO_PATCH_AUTO = "auto"
     const val AUTO_PATCH_OFF = "off"
     /** Artemis 引擎版本全量白名单，供单游戏覆盖值校验（非法持久化值回退全局）。 */
-    val ART_VERSIONS = setOf(ART_ENGINE_AUTO, ART_ENGINE_V1, ART_ENGINE_V2, ART_ENGINE_V3, ART_ENGINE_V4, ART_ENGINE_V5)
+    val ART_VERSIONS = setOf(ART_ENGINE_AUTO, ART_ENGINE_V1, ART_ENGINE_V2, ART_ENGINE_V3, ART_ENGINE_V4, ART_ENGINE_V5, ART_ENGINE_V6)
     /** Artemis 补丁策略全量白名单，供单游戏覆盖值校验（非法持久化值回退全局）。 */
     val ART_PATCHES = setOf(AUTO_PATCH_ASK, AUTO_PATCH_AUTO, AUTO_PATCH_OFF)
     const val ART_RESOLUTION_DEFAULT = ""
@@ -166,12 +225,167 @@ object EngineSettingsStore {
     const val RENPY_85 = "8.5"
     const val RENPY_77 = "7.7.1"
 
-    val KR_RENDER_PREF_KEYS = listOf(
-        KEY_KR_RENDERER, KEY_KR_SOFTWARE_DRAW_THREAD, KEY_KR_SOFTWARE_COMPRESS_TEX,
-        KEY_KR_OGL_COMPRESS_TEX, KEY_KR_MEM_USAGE, KEY_KR_OGL_MAX_TEXSIZE,
-        KEY_KR_OGL_ACCURATE_RENDER, KEY_KR_FPS_LIMIT,
-        KEY_KR_VCURSOR_SCALE, KEY_KR_MENU_HANDLER_OPA,
+    // Siglus 语言取值常量（auto 不设置 SIGLUS_LANGUAGE，保持引擎默认 JP）
+    const val SIGLUS_LANGUAGE_AUTO = "auto"
+    const val SIGLUS_LANGUAGE_JP = "JP"
+    const val SIGLUS_LANGUAGE_EN = "EN"
+    const val SIGLUS_LANGUAGE_ZH = "ZH"
+    const val SIGLUS_LANGUAGE_ZHTW = "ZHTW"
+    const val SIGLUS_LANGUAGE_DE = "DE"
+    const val SIGLUS_LANGUAGE_ES = "ES"
+    const val SIGLUS_LANGUAGE_FR = "FR"
+    const val SIGLUS_LANGUAGE_ID = "ID"
+    val SIGLUS_LANGUAGES: Set<String> = linkedSetOf(
+        SIGLUS_LANGUAGE_AUTO,
+        SIGLUS_LANGUAGE_JP,
+        SIGLUS_LANGUAGE_EN,
+        SIGLUS_LANGUAGE_ZH,
+        SIGLUS_LANGUAGE_ZHTW,
+        SIGLUS_LANGUAGE_DE,
+        SIGLUS_LANGUAGE_ES,
+        SIGLUS_LANGUAGE_FR,
+        SIGLUS_LANGUAGE_ID,
     )
+
+    // PPSSPP 外置模拟器版本取值（standard=org.ppsspp.ppsspp，gold=org.ppsspp.ppssppgold）
+    const val PPSSPP_VERSION_STANDARD = "standard"
+    const val PPSSPP_VERSION_GOLD = "gold"
+    val PPSSPP_VERSIONS: Set<String> = linkedSetOf(PPSSPP_VERSION_STANDARD, PPSSPP_VERSION_GOLD)
+
+    // framebuffer 引擎文本编码取值（创建引擎时固定，改动后需重启本局）
+    const val FB_NLS_AUTO = "auto"
+    const val FB_NLS_SJIS = "sjis"
+    const val FB_NLS_GBK = "gbk"
+    const val FB_NLS_BIG5 = "big5"
+    const val FB_NLS_UTF8 = "utf8"
+    const val FB_NLS_KOREAN = "korean"
+    val FB_NLS_VALUES: Set<String> = linkedSetOf(
+        FB_NLS_AUTO,
+        FB_NLS_SJIS,
+        FB_NLS_GBK,
+        FB_NLS_BIG5,
+        FB_NLS_UTF8,
+        FB_NLS_KOREAN,
+    )
+
+    // FVP 文本编码取值（创建引擎时固定，改动后需重启本局）
+    const val FVP_NLS_SJIS = "sjis"
+    const val FVP_NLS_GBK = "gbk"
+    const val FVP_NLS_UTF8 = "utf8"
+    val FVP_NLS_VALUES: Set<String> = linkedSetOf(
+        FVP_NLS_SJIS,
+        FVP_NLS_GBK,
+        FVP_NLS_UTF8,
+    )
+
+    // Winlator 外置启动取值域（空串 = 不下发该参数，跟随容器/快捷方式配置）
+    /**
+     * 图形驱动固定组合：Vulkan 驱动（Turnip/Vortek）× OpenGL 驱动（Zink/VirGL/Gladio），
+     * 对齐 Winlator 容器设置里的两项下拉，组合为 `vulkan,opengl` 下发。
+     */
+    val WINLATOR_GRAPHICS_DRIVERS: List<String> = listOf(
+        "turnip,zink",
+        "turnip,virgl",
+        "turnip,gladio",
+        "vortek,zink",
+        "vortek,virgl",
+        "vortek,gladio",
+    )
+
+    val WINLATOR_DXWRAPPERS: Set<String> = linkedSetOf("", "dxvk", "wined3d")
+
+    val WINLATOR_BOX64_PRESETS: Set<String> = linkedSetOf(
+        "",
+        "STABILITY",
+        "CONSERVATIVE",
+        "INTERMEDIATE",
+        "PERFORMANCE",
+    )
+
+    /** 分辨率固定档位（无自定义输入；空串 = 跟随容器配置，其余须命中此白名单）。 */
+    val WINLATOR_SCREEN_SIZES: List<String> = listOf(
+        "640x360",
+        "640x480",
+        "800x600",
+        "854x480",
+        "960x544",
+        "1024x768",
+        "1280x720",
+        "1280x800",
+        "1280x1024",
+        "1366x768",
+        "1440x900",
+        "1600x900",
+        "1920x1080",
+    )
+
+    /** 语言环境（LC_ALL）固定档位（winlator-cn 校验正则内的常用取值）。 */
+    val WINLATOR_LOCALES: List<String> = listOf(
+        "ja_JP.UTF-8",
+        "zh_CN.utf8",
+        "zh_TW.utf8",
+        "en_US.UTF-8",
+        "ko_KR.UTF-8",
+    )
+
+    /** 时区（TZ）固定档位（winlator-cn 校验正则内的常用取值）。 */
+    val WINLATOR_TIMEZONES: List<String> = listOf(
+        "Asia/Tokyo",
+        "Asia/Shanghai",
+        "Asia/Taipei",
+        "Asia/Seoul",
+        "UTC",
+        "Europe/London",
+        "America/New_York",
+    )
+
+    /** winlator-cn `Box64Preset.CUSTOM` 形态（用户自定义预设，仅回读校验用）。 */
+    private val WINLATOR_BOX64_CUSTOM_PATTERN = Regex("^CUSTOM-\\d+$")
+
+    /** 被删实现遗留的 Winlator prefs 键（一次性清理；不含当前实现使用的键）。 */
+    private val WINLATOR_LEGACY_KEYS = listOf(
+        "winlator_locale",
+        "winlator_dx_accel",
+        "winlator_hud_mode",
+        "winlator_debug_logs",
+        "winlator_controls_profile",
+        "winlator_box",
+        "winlator_turnip_version",
+        "winlator_turnip_memory",
+        "winlator_turnip_present_mode",
+        "winlator_turnip_direct_rendering",
+        "winlator_vortek_memory",
+        "winlator_vortek_image_cache",
+        "winlator_vortek_resource_memory",
+        "winlator_virgl_gl_version",
+        "winlator_virgl_vertex_bgra",
+        // 与当前实现同名的三个键：被删实现写入过非默认值（如 graphics=vortek,zink、
+        // box64=PERFORMANCE、screen=auto），一并清回默认「跟随容器配置」。
+        KEY_WINLATOR_GRAPHICS_DRIVER,
+        KEY_WINLATOR_SCREEN_SIZE,
+        KEY_WINLATOR_BOX64_PRESET,
+        // 已下线的「追加启动参数」遗留键（当前实现不再读写）。
+        "winlator_exec_args",
+    )
+    private const val KEY_WINLATOR_LEGACY_CLEANED = "winlator_legacy_clean_version"
+    private const val WINLATOR_LEGACY_CLEAN_VERSION = 3
+
+    // RPG Maker RGSS 外置模块取值域（对齐 JoiPlay utilities/f.java；verticalAlign 对齐插件默认）
+    const val RPG_WINDOW_SIZE_DEFAULT = "640x480"
+    const val RPG_SPEED_UP_DEFAULT = "1"
+    const val RPG_FONT_SCALE_DEFAULT = "0.75"
+    const val RPG_VERTICAL_ALIGN_DEFAULT = "top-center"
+    val RPG_WINDOW_SIZES: Set<String> = linkedSetOf(
+        "512x384", "512x768", "544x416", "640x480", "800x600",
+        "1024x768", "1280x720", "1280x960", "1920x1080",
+    )
+    val RPG_SPEED_UPS: Set<String> = (1..9).map { it.toString() }.toSet()
+    val RPG_FONT_SCALES: Set<String> =
+        setOf("0.25", "0.50", "0.75", "1.00", "1.25", "1.50", "1.75", "2.00")
+    val RPG_VERTICAL_ALIGNS: Set<String> = setOf("top", "top-center", "center")
+
+    /** KR 渲染/内存偏好字段清单（由 [KrRenderPrefs] 派生，保证与单游戏覆盖字段一一对应）。 */
+    val KR_RENDER_PREF_KEYS: List<String> = KrRenderPrefs.ALL.map { it.globalKey }
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(EnginePrefs.APP_PREFS, Context.MODE_PRIVATE)
@@ -280,11 +494,12 @@ object EngineSettingsStore {
     fun getKrMenuHandlerOpa(c: Context): String { val v = krPref(c, KEY_KR_MENU_HANDLER_OPA).trim(); return if (v in KR_MENU_HANDLER_OPAS) v else "" }
     fun setKrMenuHandlerOpa(c: Context, v: String) { val t = v.trim(); if (t.isEmpty() || t in KR_MENU_HANDLER_OPAS) setKrPref(c, KEY_KR_MENU_HANDLER_OPA, t) }
 
-    /** 组装 krkr_engine_prefs JSON：{<引擎键>:{v, s}}。overrideGetter 返回某键的单游戏覆盖（null=跟随全局）。 */
-    fun buildKrEnginePrefsJson(c: Context, overrideGetter: (String) -> String? = { null }): String {
+    /** 组装 krkr_engine_prefs JSON：{<引擎键>:{v, s}}。overrideGetter 返回某偏好的单游戏覆盖（null=跟随全局）。 */
+    fun buildKrEnginePrefsJson(c: Context, overrideGetter: (KrRenderPref) -> String? = { null }): String {
         val json = JSONObject()
-        KR_RENDER_PREF_KEYS.forEach { key ->
-            val rawOverride = overrideGetter(key)
+        KrRenderPrefs.ALL.forEach { pref ->
+            val key = pref.globalKey
+            val rawOverride = overrideGetter(pref)
             val override = rawOverride?.trim()?.takeIf { it.isNotEmpty() || rawOverride == "" }
             // 仅保留合法值或显式空串（引擎默认），非法值按跟随全局处理；vcursor 支持旧整型兼容
             val sanitizedOverride = when (key) {
@@ -314,8 +529,7 @@ object EngineSettingsStore {
                 }
                 else -> rawValue
             }
-            val engineKey = KR_ENGINE_PREF_KEY_MAP[key] ?: key
-            json.put(engineKey, JSONObject().put("v", value).put("s", if (sanitizedOverride != null) "game" else "global"))
+            json.put(pref.engineKey, JSONObject().put("v", value).put("s", if (sanitizedOverride != null) "game" else "global"))
         }
         return json.toString()
     }
@@ -389,10 +603,15 @@ object EngineSettingsStore {
             v == ART_ENGINE_V2 ||
             v == ART_ENGINE_V3 ||
             v == ART_ENGINE_V4 ||
-            v == ART_ENGINE_V5
+            v == ART_ENGINE_V5 ||
+            v == ART_ENGINE_V6
         ) v else ART_ENGINE_AUTO
     }
     fun setArtEngineVersion(c: Context, v: String) = prefs(c).edit().putString(KEY_ARTEMIS_ENGINE_VERSION, v).apply()
+    fun getArtKernel(c: Context): String = normalizeArtKernel(prefs(c).getString(KEY_ARTEMIS_KERNEL, ART_KERNEL_OFFICIAL))
+    fun setArtKernel(c: Context, v: String) = prefs(c).edit().putString(KEY_ARTEMIS_KERNEL, normalizeArtKernel(v)).apply()
+    fun normalizeArtKernel(v: String?): String =
+        if (v?.trim() == ART_KERNEL_CLEAN) ART_KERNEL_CLEAN else ART_KERNEL_OFFICIAL
     fun isArtRotateScreen(c: Context): Boolean = prefs(c).getBoolean(KEY_ARTEMIS_ROTATE_SCREEN, false)
     fun setArtRotateScreen(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_ARTEMIS_ROTATE_SCREEN, b).apply()
     fun getArtAutoPatch(c: Context): String {
@@ -431,6 +650,143 @@ object EngineSettingsStore {
     }
     fun setRenpyVersion(c: Context, v: String) = prefs(c).edit().putString(KEY_RENPY_ENGINE_VERSION, v).apply()
 
+    // ---------- Siglus ----------
+    fun getSiglusLanguage(c: Context): String =
+        normalizeSiglusLanguage(prefs(c).getString(KEY_SIGLUS_LANGUAGE, SIGLUS_LANGUAGE_AUTO))
+    fun setSiglusLanguage(c: Context, v: String) =
+        prefs(c).edit().putString(KEY_SIGLUS_LANGUAGE, normalizeSiglusLanguage(v)).apply()
+    fun normalizeSiglusLanguage(v: String?): String =
+        v?.trim()?.takeIf { it in SIGLUS_LANGUAGES } ?: SIGLUS_LANGUAGE_AUTO
+
+    // ---------- PPSSPP 外置模拟器 ----------
+    fun getPpssppVersion(c: Context): String =
+        normalizePpssppVersion(prefs(c).getString(KEY_PPSSPP_VERSION, PPSSPP_VERSION_STANDARD))
+    fun setPpssppVersion(c: Context, v: String) =
+        prefs(c).edit().putString(KEY_PPSSPP_VERSION, normalizePpssppVersion(v)).apply()
+    fun normalizePpssppVersion(v: String?): String =
+        v?.trim()?.lowercase()?.takeIf { it in PPSSPP_VERSIONS } ?: PPSSPP_VERSION_STANDARD
+
+    // ---------- framebuffer 引擎（RealLive / AVG32 / UK2） ----------
+    fun getFbNls(c: Context): String =
+        normalizeFbNls(prefs(c).getString(KEY_FB_NLS, FB_NLS_AUTO))
+    fun setFbNls(c: Context, v: String) =
+        prefs(c).edit().putString(KEY_FB_NLS, normalizeFbNls(v)).apply()
+    fun normalizeFbNls(v: String?): String =
+        v?.trim()?.lowercase()?.takeIf { it in FB_NLS_VALUES } ?: FB_NLS_AUTO
+
+    // ---------- FVP ----------
+    fun getFvpNls(c: Context): String =
+        normalizeFvpNls(prefs(c).getString(KEY_FVP_NLS, FVP_NLS_SJIS))
+    fun setFvpNls(c: Context, v: String) =
+        prefs(c).edit().putString(KEY_FVP_NLS, normalizeFvpNls(v)).apply()
+    fun normalizeFvpNls(v: String?): String =
+        v?.trim()?.lowercase()?.takeIf { it in FVP_NLS_VALUES } ?: FVP_NLS_SJIS
+    fun isFvpSystemFont(c: Context): Boolean = prefs(c).getBoolean(KEY_FVP_SYSTEM_FONT, true)
+    fun setFvpSystemFont(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_FVP_SYSTEM_FONT, b).apply()
+    fun isFvpTextHidpi(c: Context): Boolean = prefs(c).getBoolean(KEY_FVP_TEXT_HIDPI, true)
+    fun setFvpTextHidpi(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_FVP_TEXT_HIDPI, b).apply()
+    fun getFvpFont(c: Context): String = normalizeFvpFont(prefs(c).getString(KEY_FVP_FONT, ""))
+    fun setFvpFont(c: Context, v: String?) =
+        prefs(c).edit().putString(KEY_FVP_FONT, normalizeFvpFont(v)).apply()
+    fun normalizeFvpFont(v: String?): String = v?.trim().orEmpty()
+
+    // ---------- Winlator 外置启动 ----------
+
+    /**
+     * Winlator 外置启动下发参数（YU-RIS / CatSystem2 / PC 共用）。
+     * 空串/0/false 表示不下发对应 extra，交由 Winlator 按容器配置与回退链处理。
+     */
+    data class Winlator(
+        var containerId: Int = 0,
+        var containerName: String = "",
+        var graphicsDriver: String = "",
+        var dxwrapper: String = "",
+        var screenSize: String = "",
+        var lcAll: String = "",
+        var tz: String = "",
+        var box64Preset: String = "",
+        var save: Boolean = false,
+    )
+
+    fun loadWinlator(c: Context): Winlator {
+        val p = prefs(c)
+        val d = Winlator()
+        return Winlator(
+            containerId = p.getInt(KEY_WINLATOR_CONTAINER_ID, d.containerId).coerceAtLeast(0),
+            containerName = p.getString(KEY_WINLATOR_CONTAINER_NAME, d.containerName).orEmpty().trim(),
+            graphicsDriver = normalizeWinlatorGraphicsDriver(p.getString(KEY_WINLATOR_GRAPHICS_DRIVER, d.graphicsDriver)),
+            dxwrapper = normalizeWinlatorDxWrapper(p.getString(KEY_WINLATOR_DXWRAPPER, d.dxwrapper)),
+            screenSize = normalizeWinlatorScreenSize(p.getString(KEY_WINLATOR_SCREEN_SIZE, d.screenSize)),
+            lcAll = normalizeWinlatorLcAll(p.getString(KEY_WINLATOR_LC_ALL, d.lcAll)),
+            tz = normalizeWinlatorTz(p.getString(KEY_WINLATOR_TZ, d.tz)),
+            box64Preset = normalizeWinlatorBox64Preset(p.getString(KEY_WINLATOR_BOX64_PRESET, d.box64Preset)),
+            save = p.getBoolean(KEY_WINLATOR_SAVE, d.save),
+        )
+    }
+
+    /**
+     * 一次性清理被删实现遗留的 Winlator prefs 键（应用启动时调用，版本号保证每轮只跑一次）。
+     * 含与当前实现同名的图形驱动/分辨率/Box64 预设（被删实现写入的值清回默认「跟随容器配置」）
+     * 与已下线的「追加启动参数」键；其余当前实现的键不在清理范围内。
+     */
+    fun cleanupLegacyWinlatorKeys(c: Context) {
+        val p = prefs(c)
+        if (p.getInt(KEY_WINLATOR_LEGACY_CLEANED, 0) >= WINLATOR_LEGACY_CLEAN_VERSION) return
+        val editor = p.edit()
+        WINLATOR_LEGACY_KEYS.forEach(editor::remove)
+        // 旧轮次的布尔标记一并移除（v1/v2）
+        editor.remove("winlator_legacy_keys_cleaned")
+        editor.remove("winlator_legacy_keys_cleaned_v2")
+        editor.putInt(KEY_WINLATOR_LEGACY_CLEANED, WINLATOR_LEGACY_CLEAN_VERSION)
+        editor.apply()
+    }
+
+    fun saveWinlator(c: Context, w: Winlator) {
+        prefs(c).edit().apply {
+            putInt(KEY_WINLATOR_CONTAINER_ID, w.containerId.coerceAtLeast(0))
+            putString(KEY_WINLATOR_CONTAINER_NAME, w.containerName.trim())
+            putString(KEY_WINLATOR_GRAPHICS_DRIVER, normalizeWinlatorGraphicsDriver(w.graphicsDriver))
+            putString(KEY_WINLATOR_DXWRAPPER, normalizeWinlatorDxWrapper(w.dxwrapper))
+            putString(KEY_WINLATOR_SCREEN_SIZE, normalizeWinlatorScreenSize(w.screenSize))
+            putString(KEY_WINLATOR_LC_ALL, normalizeWinlatorLcAll(w.lcAll))
+            putString(KEY_WINLATOR_TZ, normalizeWinlatorTz(w.tz))
+            putString(KEY_WINLATOR_BOX64_PRESET, normalizeWinlatorBox64Preset(w.box64Preset))
+            putBoolean(KEY_WINLATOR_SAVE, w.save)
+        }.apply()
+    }
+
+    /** 图形驱动：仅接受 [WINLATOR_GRAPHICS_DRIVERS] 固定组合；其余（含单驱动残留）归一回空串。 */
+    fun normalizeWinlatorGraphicsDriver(v: String?): String {
+        val t = v?.trim()?.lowercase()?.replace(" ", "").orEmpty()
+        return t.takeIf { it in WINLATOR_GRAPHICS_DRIVERS } ?: ""
+    }
+
+    fun normalizeWinlatorDxWrapper(v: String?): String =
+        v?.trim()?.lowercase()?.takeIf { it in WINLATOR_DXWRAPPERS } ?: ""
+
+    fun normalizeWinlatorBox64Preset(v: String?): String {
+        val t = v?.trim()?.uppercase().orEmpty()
+        return if (t in WINLATOR_BOX64_PRESETS || WINLATOR_BOX64_CUSTOM_PATTERN.matches(t)) t else ""
+    }
+
+    /** 分辨率：仅接受固定档位白名单；其余（含旧实现残留的 auto 等）归一回空串。 */
+    fun normalizeWinlatorScreenSize(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return t.takeIf { it in WINLATOR_SCREEN_SIZES } ?: ""
+    }
+
+    /** 语言环境（LC_ALL）：仅接受 [WINLATOR_LOCALES] 固定档位；其余归一回空串。 */
+    fun normalizeWinlatorLcAll(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return t.takeIf { it in WINLATOR_LOCALES } ?: ""
+    }
+
+    /** 时区（TZ）：仅接受 [WINLATOR_TIMEZONES] 固定档位；其余归一回空串。 */
+    fun normalizeWinlatorTz(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return t.takeIf { it in WINLATOR_TIMEZONES } ?: ""
+    }
+
     // ---------- Tyrano ----------
     fun isTyranoExternalNetwork(c: Context): Boolean = prefs(c).getBoolean(KEY_TYRANO_EXTERNAL_NETWORK, false)
     fun setTyranoExternalNetwork(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_TYRANO_EXTERNAL_NETWORK, b).apply()
@@ -440,6 +796,8 @@ object EngineSettingsStore {
     fun setRpgMakerModEnabled(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_RPG_MAKER_MOD_ENABLED, b).apply()
     fun isRpgLegacyRenderer(c: Context): Boolean = prefs(c).getBoolean(KEY_RPG_LEGACY_RENDERER, false)
     fun setRpgLegacyRenderer(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_RPG_LEGACY_RENDERER, b).apply()
+    fun isRpgSaveInterop(c: Context): Boolean = prefs(c).getBoolean(KEY_RPG_SAVE_INTEROP, false)
+    fun setRpgSaveInterop(c: Context, b: Boolean) = prefs(c).edit().putBoolean(KEY_RPG_SAVE_INTEROP, b).apply()
 
     // ---------- RPG Maker MV / MZ ----------
     fun getRpgMvEngineVersion(c: Context): String =
@@ -463,5 +821,181 @@ object EngineSettingsStore {
         RPG_MZ_V2 -> RPG_MZ_V2
         RPG_MZ_V0 -> RPG_MZ_V0
         else -> RPG_MZ_V0
+    }
+
+    // ---------- RPG Maker RGSS 外置模块 ----------
+
+    /**
+     * RGSS/mkxp 外置模块的 rpg 配置节。默认值对齐 JoiPlay `SettingsFactory.loadDefault`：
+     * useRuby18/smoothScaling/prebuiltPathCache/cheats 默认开，其余默认关。
+     * 仅保留 RPGM 插件 `MKXPConfigurationParser` 实际解析的键。
+     */
+    data class RpgMaker(
+        var useRuby18: Boolean = true,
+        var debug: Boolean = false,
+        var smoothScaling: Boolean = true,
+        var vsync: Boolean = false,
+        var frameSkip: Boolean = false,
+        var solidFonts: Boolean = false,
+        var pathCache: Boolean = false,
+        var prebuiltPathCache: Boolean = true,
+        var fastPathEnum: Boolean = true,
+        var copyText: Boolean = false,
+        var cheats: Boolean = true,
+        var useCJKFont: Boolean = false,
+        var enablePostloadScripts: Boolean = false,
+        var customFont: String = "",
+        var verticalScreenAlign: String = RPG_VERTICAL_ALIGN_DEFAULT,
+        var windowSize: String = RPG_WINDOW_SIZE_DEFAULT,
+        var speedUp: String = RPG_SPEED_UP_DEFAULT,
+        var fontScale: String = RPG_FONT_SCALE_DEFAULT,
+    )
+
+    private val RPG_MAKER_BOOL_KEYS = listOf(
+        KEY_RPG_USE_RUBY18, KEY_RPG_DEBUG, KEY_RPG_SMOOTH_SCALING,
+        KEY_RPG_VSYNC, KEY_RPG_FRAME_SKIP, KEY_RPG_SOLID_FONTS, KEY_RPG_PATH_CACHE,
+        KEY_RPG_PREBUILT_PATH_CACHE, KEY_RPG_FAST_PATH_ENUM, KEY_RPG_COPY_TEXT,
+        KEY_RPG_CHEATS, KEY_RPG_USE_CJK_FONT, KEY_RPG_ENABLE_POSTLOAD_SCRIPTS,
+    )
+    private val RPG_MAKER_STRING_KEYS = listOf(
+        KEY_RPG_CUSTOM_FONT, KEY_RPG_VERTICAL_SCREEN_ALIGN,
+        KEY_RPG_WINDOW_SIZE, KEY_RPG_SPEED_UP, KEY_RPG_FONT_SCALE,
+    )
+
+    fun loadRpgMaker(c: Context): RpgMaker {
+        val p = prefs(c)
+        val d = RpgMaker()
+        return RpgMaker(
+            useRuby18 = p.getBoolean(KEY_RPG_USE_RUBY18, d.useRuby18),
+            debug = p.getBoolean(KEY_RPG_DEBUG, d.debug),
+            smoothScaling = p.getBoolean(KEY_RPG_SMOOTH_SCALING, d.smoothScaling),
+            vsync = p.getBoolean(KEY_RPG_VSYNC, d.vsync),
+            frameSkip = p.getBoolean(KEY_RPG_FRAME_SKIP, d.frameSkip),
+            solidFonts = p.getBoolean(KEY_RPG_SOLID_FONTS, d.solidFonts),
+            pathCache = p.getBoolean(KEY_RPG_PATH_CACHE, d.pathCache),
+            prebuiltPathCache = p.getBoolean(KEY_RPG_PREBUILT_PATH_CACHE, d.prebuiltPathCache),
+            fastPathEnum = p.getBoolean(KEY_RPG_FAST_PATH_ENUM, d.fastPathEnum),
+            copyText = p.getBoolean(KEY_RPG_COPY_TEXT, d.copyText),
+            cheats = p.getBoolean(KEY_RPG_CHEATS, d.cheats),
+            useCJKFont = p.getBoolean(KEY_RPG_USE_CJK_FONT, d.useCJKFont),
+            enablePostloadScripts = p.getBoolean(KEY_RPG_ENABLE_POSTLOAD_SCRIPTS, d.enablePostloadScripts),
+            customFont = p.getString(KEY_RPG_CUSTOM_FONT, d.customFont).orEmpty(),
+            verticalScreenAlign = normalizeRpgVerticalAlign(p.getString(KEY_RPG_VERTICAL_SCREEN_ALIGN, d.verticalScreenAlign)),
+            windowSize = normalizeRpgWindowSize(p.getString(KEY_RPG_WINDOW_SIZE, d.windowSize)),
+            speedUp = normalizeRpgSpeedUp(p.getString(KEY_RPG_SPEED_UP, d.speedUp)),
+            fontScale = normalizeRpgFontScale(p.getString(KEY_RPG_FONT_SCALE, d.fontScale)),
+        )
+    }
+
+    fun saveRpgMaker(c: Context, r: RpgMaker) {
+        prefs(c).edit().apply {
+            putBoolean(KEY_RPG_USE_RUBY18, r.useRuby18)
+            putBoolean(KEY_RPG_DEBUG, r.debug)
+            putBoolean(KEY_RPG_SMOOTH_SCALING, r.smoothScaling)
+            putBoolean(KEY_RPG_VSYNC, r.vsync)
+            putBoolean(KEY_RPG_FRAME_SKIP, r.frameSkip)
+            putBoolean(KEY_RPG_SOLID_FONTS, r.solidFonts)
+            putBoolean(KEY_RPG_PATH_CACHE, r.pathCache)
+            putBoolean(KEY_RPG_PREBUILT_PATH_CACHE, r.prebuiltPathCache)
+            putBoolean(KEY_RPG_FAST_PATH_ENUM, r.fastPathEnum)
+            putBoolean(KEY_RPG_COPY_TEXT, r.copyText)
+            putBoolean(KEY_RPG_CHEATS, r.cheats)
+            putBoolean(KEY_RPG_USE_CJK_FONT, r.useCJKFont)
+            putBoolean(KEY_RPG_ENABLE_POSTLOAD_SCRIPTS, r.enablePostloadScripts)
+            putString(KEY_RPG_CUSTOM_FONT, r.customFont.trim())
+            putString(KEY_RPG_VERTICAL_SCREEN_ALIGN, normalizeRpgVerticalAlign(r.verticalScreenAlign))
+            putString(KEY_RPG_WINDOW_SIZE, normalizeRpgWindowSize(r.windowSize))
+            putString(KEY_RPG_SPEED_UP, normalizeRpgSpeedUp(r.speedUp))
+            putString(KEY_RPG_FONT_SCALE, normalizeRpgFontScale(r.fontScale))
+        }.apply()
+    }
+
+    /** 仅重置 rpg 节，其余引擎设置不动（对齐 JoiPlay resetSettingsButton 的作用域）。 */
+    fun resetRpgMaker(c: Context) {
+        val editor = prefs(c).edit()
+        RPG_MAKER_BOOL_KEYS.forEach(editor::remove)
+        RPG_MAKER_STRING_KEYS.forEach(editor::remove)
+        editor.apply()
+    }
+
+    fun normalizeRpgWindowSize(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return if (t in RPG_WINDOW_SIZES) t else RPG_WINDOW_SIZE_DEFAULT
+    }
+
+    fun normalizeRpgSpeedUp(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return if (t in RPG_SPEED_UPS) t else RPG_SPEED_UP_DEFAULT
+    }
+
+    fun normalizeRpgFontScale(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return if (t in RPG_FONT_SCALES) t else RPG_FONT_SCALE_DEFAULT
+    }
+
+    fun normalizeRpgVerticalAlign(v: String?): String {
+        val t = v?.trim().orEmpty()
+        return if (t in RPG_VERTICAL_ALIGNS) t else RPG_VERTICAL_ALIGN_DEFAULT
+    }
+
+    // ---------- Ren'Py 外置模块 ----------
+
+    /**
+     * Ren'Py 外置模块的配置节。默认值对齐 JoiPlay `SettingsFactory.loadDefault` 与插件
+     * `RenPyConfiguration`：hw_video/cheats 默认开，其余默认关。
+     */
+    data class RenPy(
+        var cheats: Boolean = true,
+        var hwVideo: Boolean = true,
+        var autosave: Boolean = false,
+        var phoneSmallVariant: Boolean = false,
+        var vsync: Boolean = false,
+        var lessMemory: Boolean = false,
+        var lessUpdates: Boolean = false,
+        var dontUseGl2: Boolean = false,
+        var recompile: Boolean = false,
+    )
+
+    private val RENPY_BOOL_KEYS = listOf(
+        KEY_RENPY_CHEATS, KEY_RENPY_HW_VIDEO, KEY_RENPY_AUTOSAVE,
+        KEY_RENPY_PHONE_SMALL_VARIANT, KEY_RENPY_VSYNC, KEY_RENPY_LESS_MEMORY,
+        KEY_RENPY_LESS_UPDATES, KEY_RENPY_DONT_USE_GL2, KEY_RENPY_RECOMPILE,
+    )
+
+    fun loadRenPy(c: Context): RenPy {
+        val p = prefs(c)
+        val d = RenPy()
+        return RenPy(
+            cheats = p.getBoolean(KEY_RENPY_CHEATS, d.cheats),
+            hwVideo = p.getBoolean(KEY_RENPY_HW_VIDEO, d.hwVideo),
+            autosave = p.getBoolean(KEY_RENPY_AUTOSAVE, d.autosave),
+            phoneSmallVariant = p.getBoolean(KEY_RENPY_PHONE_SMALL_VARIANT, d.phoneSmallVariant),
+            vsync = p.getBoolean(KEY_RENPY_VSYNC, d.vsync),
+            lessMemory = p.getBoolean(KEY_RENPY_LESS_MEMORY, d.lessMemory),
+            lessUpdates = p.getBoolean(KEY_RENPY_LESS_UPDATES, d.lessUpdates),
+            dontUseGl2 = p.getBoolean(KEY_RENPY_DONT_USE_GL2, d.dontUseGl2),
+            recompile = p.getBoolean(KEY_RENPY_RECOMPILE, d.recompile),
+        )
+    }
+
+    fun saveRenPy(c: Context, r: RenPy) {
+        prefs(c).edit().apply {
+            putBoolean(KEY_RENPY_CHEATS, r.cheats)
+            putBoolean(KEY_RENPY_HW_VIDEO, r.hwVideo)
+            putBoolean(KEY_RENPY_AUTOSAVE, r.autosave)
+            putBoolean(KEY_RENPY_PHONE_SMALL_VARIANT, r.phoneSmallVariant)
+            putBoolean(KEY_RENPY_VSYNC, r.vsync)
+            putBoolean(KEY_RENPY_LESS_MEMORY, r.lessMemory)
+            putBoolean(KEY_RENPY_LESS_UPDATES, r.lessUpdates)
+            putBoolean(KEY_RENPY_DONT_USE_GL2, r.dontUseGl2)
+            putBoolean(KEY_RENPY_RECOMPILE, r.recompile)
+        }.apply()
+    }
+
+    /** 仅重置 renpy 节，版本键（renpy_engine_version）保留。 */
+    fun resetRenPy(c: Context) {
+        val editor = prefs(c).edit()
+        RENPY_BOOL_KEYS.forEach(editor::remove)
+        editor.apply()
     }
 }

@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.runtime.Composable
@@ -40,7 +39,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.tyranor.next.theme.AppThemeColors
+import com.tyranor.next.theme.glassShadow
+import com.tyranor.next.theme.GlassPanel
 import com.tyranor.next.theme.NavWhite
+import com.tyranor.next.theme.glassBorder
+import com.tyranor.next.theme.rememberAdvancedGlassPanelSurface
+import com.tyranor.next.theme.AppComponentShape
 import kotlinx.coroutines.launch
 
 /**
@@ -57,11 +62,16 @@ internal fun AppAlertDialog(
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val windowHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val configuration = LocalConfiguration.current
+    val windowHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    // 正文区域高度上限随屏幕自适应：固定 420dp 会在长列表（如 Artemis 全版本）末条截断
+    val textMaxHeight = (configuration.screenHeightDp * 0.62f).dp.coerceIn(280.dp, 560.dp)
     val dimAlpha = remember { Animatable(0f) }
     val slideFraction = remember { Animatable(1f) }
     val dismissing = remember { mutableStateOf(false) }
     val currentOnDismiss by rememberUpdatedState(onDismissRequest)
+    // 高级玻璃：面板渐变从页面背景取色（独立窗口采不到 backdrop，用跨窗口取色替代）
+    val advancedPanelSurface = if (AppThemeColors.isAdvancedGlass) rememberAdvancedGlassPanelSurface() else null
 
     fun dismiss() {
         if (dismissing.value) return
@@ -77,11 +87,12 @@ internal fun AppAlertDialog(
         onDismissRequest = { dismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        // 窗口变暗遮罩，点击关闭
+        // 窗口变暗遮罩，点击关闭；高级玻璃面板为较高不透明度的灰玻璃膜，遮罩略加深即可
+        val scrimAlpha = if (AppThemeColors.isAdvancedGlass) 0.6f else 0.5f
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.5f * dimAlpha.value))
+                .background(Color.Black.copy(alpha = scrimAlpha * dimAlpha.value))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -100,16 +111,32 @@ internal fun AppAlertDialog(
                         translationY = slideFraction.value * windowHeightPx
                     }
                     // 消费卡片区域点击，避免穿透到遮罩
-                    .pointerInput(Unit) { detectTapGestures { } },
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .glassShadow()
+                    .then(
+                        if (advancedPanelSurface != null) {
+                            Modifier.background(advancedPanelSurface.brush, AppComponentShape)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .glassBorder(),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                colors = CardDefaults.cardColors(containerColor = NavWhite),
-                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(
+                    // 玻璃系风格用高不透明度玻璃面板保证可读性；高级玻璃由取色渐变承担底色
+                    containerColor = when {
+                        AppThemeColors.isAdvancedGlass -> Color.Transparent
+                        AppThemeColors.isGlass -> GlassPanel
+                        else -> NavWhite
+                    },
+                ),
+                shape = AppComponentShape,
             ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp)) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         title()
                     }
-                    Box(Modifier.fillMaxWidth().heightIn(max = 420.dp).padding(top = 14.dp)) {
+                    Box(Modifier.fillMaxWidth().heightIn(max = textMaxHeight).padding(top = 14.dp)) {
                         text()
                     }
                     Row(

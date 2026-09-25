@@ -1,6 +1,5 @@
 package com.tyranor.next.ui.common
 
-import android.content.res.Configuration
 import android.os.Build
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
@@ -27,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -55,7 +56,11 @@ import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.Shadow
 import com.tyranor.next.core.settings.AppSettingsStore
+import com.tyranor.next.ui.common.glass.GlassBottomBarSpec
+import com.tyranor.next.ui.common.glass.GlassShaderSupport
 import com.tyranor.next.theme.AppThemeColors
+import com.tyranor.next.theme.DarkGrey
+import com.tyranor.next.theme.glassEdgeStroke
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -67,7 +72,7 @@ data class LiquidGlassNavItem(
 )
 
 /**
- * 圆角液态玻璃底部导航栏（参考 RinneMobile 流体玻璃导航样式）：
+ * 液态玻璃 · 经典底栏（参考 RinneMobile 流体玻璃导航样式）：
  * 通过 [com.kyant.backdrop] 对页面内容做 vibrancy + blur 采样，呈现“看穿”的毛玻璃质感；
  * 选中项有跟随的主题色玻璃焦点胶囊；支持长按后左右拖动切换页面（移植自 RinneMobile）。
  * 悬浮于内容之上，圆角 16dp。
@@ -81,10 +86,24 @@ fun LiquidGlassNavigationBar(
     items: List<LiquidGlassNavItem>,
     onItemClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 是否允许传 `Highlight`（高光）。
+     *
+     * `false` 时本档不画高光。它只应在「**需要** AGSL 而 AGSL 不可用」时被传成 `false`：
+     * 库的 `HighlightStyle.Default` 在 API 33+ 会 `obtainRuntimeShader { RuntimeShader(...) }`，
+     * 而高光由库节点在 attach/draw 期间自行构造、调用方无法 catch——透镜档探测失败回退到本档时，
+     * 若不掐掉这处依赖，兜底就等于「从一个会崩的档退回另一个会崩的档」。
+     *
+     * 注意 **API 31–32 不是这种情况**：那里没有 `RuntimeShader`，库会走「描边 + `BlurMaskFilter`」，
+     * 高光本来就有、也不会崩，因此必须保持 `true`（调用方用
+     * `GlassShaderSupport.highlightAllowed` 计算，别直接用 `isRuntimeShaderUsable`）。
+     * 默认值 `true` 保证默认与正常设备上的画面、行为**一字不变**。
+     */
+    highlightAvailable: Boolean = true,
 ) {
     val density = LocalDensity.current
-    // 玻璃表面色随外观模式：深色模式用深色表面
-    val surfaceColor = if (AppThemeColors.isDark) Color(0xFF17191C) else Color.White
+    // 玻璃表面色随外观模式：深色模式用深色表面；高级玻璃参考图的悬浮玻璃为浅色
+    val surfaceColor = if (AppThemeColors.isDark && !AppThemeColors.isAdvancedGlass) DarkGrey else Color.White
     val mutedColor = unselectedColor
     // 统一圆角（AGENT.md）：圆角组件一律 8dp；液态玻璃导航在 8dp 基础上加大 8dp，视觉更圆润
     val shape = RoundedCornerShape(16.dp)
@@ -92,7 +111,13 @@ fun LiquidGlassNavigationBar(
     val backdropSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     // 高版本表面半透明以透出模糊内容
     // 呈现液态玻璃质感；低版本（<12）无实时模糊，直接用不透明实底，避免文字等内容透出。
-    val glassSurfaceAlpha = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.55f else 1f
+    // 高级玻璃更通透（透出封面模糊底图）、高光更强；复古玻璃保持既有参数不变。
+    val advancedGlass = AppThemeColors.isAdvancedGlass
+    val glassSurfaceAlpha = if (backdropSupported) {
+        if (advancedGlass) 0.42f else 0.55f
+    } else {
+        1f
+    }
     val currentSelectedIndex by rememberUpdatedState(selectedIndex)
     val currentOnItemClick by rememberUpdatedState(onItemClick)
     var navWidth by remember { mutableIntStateOf(0) }
@@ -129,7 +154,11 @@ fun LiquidGlassNavigationBar(
                 vibrancy()
                 blur(with(density) { 12.dp.toPx() })
             },
-            highlight = { Highlight.Default.copy(alpha = 0.85f) },
+            highlight = if (highlightAvailable) {
+                { Highlight.Default.copy(alpha = if (advancedGlass) 1f else 0.85f) }
+            } else {
+                null
+            },
             shadow = { Shadow.Default.copy(alpha = 0.8f) },
             onDrawSurface = {
                 drawRect(surfaceColor.copy(alpha = glassSurfaceAlpha))
@@ -139,6 +168,14 @@ fun LiquidGlassNavigationBar(
         Modifier.clip(shape).background(surfaceColor.copy(alpha = 0.96f))
     }
 
+    // 浅色档：半透明白表面压在纯白/浅灰页面上几乎看不见边界，补一条中性色发丝描边勾出悬浮轮廓
+    // （深色档不加：深底本身有对比，栏体自带高光与投影）
+    val edgeStrokeModifier = if (AppThemeColors.isDark) {
+        Modifier
+    } else {
+        Modifier.glassEdgeStroke(shape)
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -146,6 +183,7 @@ fun LiquidGlassNavigationBar(
             .padding(horizontal = 12.dp, vertical = 12.dp)
             .height(64.dp)
             .then(navigationSurfaceModifier)
+            .then(edgeStrokeModifier)
             .onSizeChanged { if (navWidth != it.width) navWidth = it.width }
             .pointerInput(itemWidth, items.size) {
                 detectDragGesturesAfterLongPress(
@@ -259,24 +297,38 @@ private fun LiquidGlassNavItemView(
 }
 
 /**
- * 液态玻璃导航悬浮时的列表底部滚动留白：
- * 内容可滚动经过玻璃后面（沉浸），但列表尾部预留导航高度（64+12*2+系统导航条），
- * 保证滚动到底时最后一项完全露出不被遮挡。非液态玻璃模式返回 0。
+ * 悬浮导航栏的列表底部滚动留白：
+ * 内容可滚动经过玻璃后面（沉浸），但列表尾部预留导航高度，保证滚动到底时最后一项完全露出不被遮挡。
+ * - 平板侧栏布局：导航在侧边占布局宽度，底部留白为 0（返回 0）；
+ * - 液态玻璃 · 经典：栏高 64 + 上下各 12 外边距 = 88dp；
+ * - 液态玻璃 · 透镜：栏高 64 + 底部 12 外边距 = 76dp（无上边距）；
+ * - 玻璃外观风格下的悬浮默认导航条：无文字后栏高收窄至 64 + 上下各 12 外边距；
+ * - 其余情况返回 0（导航栏占布局高度）。
  */
 @Composable
 fun glassNavBottomInset(): Dp {
-    return if (AppSettingsStore.navStyleState.value == AppSettingsStore.NAV_STYLE_LIQUID_GLASS) {
-        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 88.dp
-    } else {
-        0.dp
+    // 平板侧栏：导航在侧边且占布局宽度，底部不需要留白
+    if (isSideRailLayout()) return 0.dp
+    val navStyle by AppSettingsStore.navStyleState.collectAsState()
+    val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    return when (navStyle) {
+        AppSettingsStore.NAV_STYLE_LIQUID_GLASS_ENHANCED -> {
+            // 窗口窄到组件自己不渲染时不能留白，否则底部会空出一条
+            val spec = GlassBottomBarSpec.Default
+            val density = LocalDensity.current
+            val windowWidthDp = with(density) {
+                LocalWindowInfo.current.containerSize.width.toDp()
+            }.takeIf { it > 0.dp } ?: LocalConfiguration.current.screenWidthDp.dp
+            when {
+                // 窗口窄到组件自己不渲染时不能留白，否则底部会空出一条
+                !spec.canRender(windowWidthDp) -> 0.dp
+                // 运行期 AGSL 不可用时 MainScreen 会退回经典档，留白必须跟着按经典档算
+                !GlassShaderSupport.isRuntimeShaderUsable -> navBarInset + 88.dp
+                else -> navBarInset + spec.hostBottomInset()
+            }
+        }
+        // 经典档：栏高 64 + 上下各 12
+        AppSettingsStore.NAV_STYLE_LIQUID_GLASS -> navBarInset + 88.dp
+        else -> if (AppThemeColors.isGlass) navBarInset + 88.dp else 0.dp
     }
-}
-
-/** 宽屏判定：横屏或宽设备（screenWidthDp / smallestScreenWidthDp ≥ 600），用于大屏布局适配（如游戏页 6 列网格）。 */
-@Composable
-fun isWideScreen(): Boolean {
-    val configuration = LocalConfiguration.current
-    return configuration.orientation == Configuration.ORIENTATION_LANDSCAPE ||
-        configuration.screenWidthDp >= 600 ||
-        configuration.smallestScreenWidthDp >= 600
 }

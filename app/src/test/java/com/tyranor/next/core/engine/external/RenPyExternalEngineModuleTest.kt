@@ -2,6 +2,8 @@ package com.tyranor.next.core.engine.external
 
 import com.tyranor.next.core.engine.EngineType
 import com.tyranor.next.core.game.model.ScanGame
+import com.tyranor.next.core.settings.EngineSettingsStore
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -43,6 +45,60 @@ class RenPyExternalEngineModuleTest {
         val payload = RenPyExternalEngineModule.buildGameJson(request)
 
         assertTrue(payload.contains("\"title\":\"引号\\\"与换行\\n\""))
+    }
+
+    @Test
+    fun buildsNestedSettingsWithTypeWrappers() {
+        val json = JSONObject(RenPyExternalEngineModule.buildSettingsJson())
+        val app = json.getJSONObject("app")
+        val renpy = json.getJSONObject("renpy")
+
+        assertTrue(app.getJSONObject("cheats").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_hw_video").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_autosave").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_phonesmallvariant").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_vsync").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_less_memory").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_less_updates").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_dont_use_gl2").getBoolean("boolean"))
+        assertEquals(false, renpy.getJSONObject("renpy_recompile").getBoolean("boolean"))
+        assertEquals(8, renpy.length())
+    }
+
+    @Test
+    fun passesResolvedSettingsIntoPayload() {
+        val settings = EngineSettingsStore.RenPy(
+            cheats = false,
+            hwVideo = false,
+            autosave = true,
+            phoneSmallVariant = true,
+            vsync = true,
+            lessMemory = true,
+            lessUpdates = true,
+            dontUseGl2 = true,
+            recompile = true,
+        )
+
+        val json = JSONObject(RenPyExternalEngineModule.buildSettingsJson(settings))
+
+        assertEquals(false, json.getJSONObject("app").getJSONObject("cheats").getBoolean("boolean"))
+        val renpy = json.getJSONObject("renpy")
+        assertEquals(false, renpy.getJSONObject("renpy_hw_video").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_autosave").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_phonesmallvariant").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_vsync").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_less_memory").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_less_updates").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_dont_use_gl2").getBoolean("boolean"))
+        assertTrue(renpy.getJSONObject("renpy_recompile").getBoolean("boolean"))
+    }
+
+    @Test
+    fun renpy77SharesSameSettingsProtocol() {
+        val settings = EngineSettingsStore.RenPy(lessMemory = true)
+        val payload = JSONObject(RenPy77ExternalEngineModule.buildSettingsJson(settings))
+        assertTrue(payload.getJSONObject("renpy").getJSONObject("renpy_less_memory").getBoolean("boolean"))
+        assertEquals("cyou.joiplay.runtime.renpy.run", RenPy77ExternalEngineModule.action)
     }
 
     private fun parseFlatJson(payload: String): Map<String, String> {

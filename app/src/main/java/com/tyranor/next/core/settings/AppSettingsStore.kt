@@ -2,8 +2,8 @@ package com.tyranor.next.core.settings
 
 import android.content.Context
 import android.content.res.Configuration
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableStateOf
+import android.os.Build
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * 应用设置存储层：与引擎无关的应用级偏好（如主题色、导航栏样式）。
@@ -13,11 +13,15 @@ object AppSettingsStore {
 
     const val KEY_THEME_COLOR = "theme_color"
     const val KEY_NAV_STYLE = "nav_style"
+    const val KEY_LIQUID_GLASS_ENHANCE = "liquid_glass_enhance"
+    const val KEY_APPEARANCE_STYLE = "appearance_style"
     const val KEY_SCAN_DEPTH = "scan_depth"
     const val KEY_LANGUAGE = "language"
     const val KEY_THEME_MODE = "theme_mode"
     const val KEY_TONE_SWITCH = "tone_switch"
     const val KEY_GAME_SORT = "game_sort"
+    const val KEY_ENGINE_TABS = "engine_tabs"
+    const val KEY_SIDE_RAIL = "side_rail"
     const val KEY_COVER_SCRAPER_ONLY_MISSING = "cover_scraper_only_missing"
     const val KEY_COVER_SCRAPER_SOURCE_ORDER = "cover_scraper_source_order"
     private const val KEY_COVER_SCRAPER_SOURCE_ENABLED_PREFIX = "cover_scraper_source_enabled_"
@@ -52,7 +56,7 @@ object AppSettingsStore {
     const val LANGUAGE_EN = "en"
 
     /** App 语言内存态：设置页切换后根 Composable 可即时重组。 */
-    val languageState: MutableState<String> = mutableStateOf(LANGUAGE_ZH)
+    val languageState: MutableStateFlow<String> = MutableStateFlow(LANGUAGE_ZH)
 
     /** 外观模式：浅色。 */
     const val THEME_MODE_LIGHT = "light"
@@ -75,24 +79,75 @@ object AppSettingsStore {
     /** 游戏排序：按标题中 【】/[] 标签内容分组。 */
     const val GAME_SORT_BRACKET_TAG = "bracket_tag"
 
-    /** 底部导航栏样式：默认。 */
+    /** 底部导航栏样式：默认（Material3 导航栏）。 */
     const val NAV_STYLE_DEFAULT = "default"
 
-    /** 底部导航栏样式：圆角液态玻璃（流体玻璃）。 */
+    /** 底部导航栏样式：液态玻璃（圆角玻璃栏，Android 12+ 生效）。 */
     const val NAV_STYLE_LIQUID_GLASS = "liquid_glass"
 
+    /** 底部导航栏样式：液态玻璃 · 透镜（三层采样 + 折射透镜，Android 13+ 才有完整效果）。 */
+    const val NAV_STYLE_LIQUID_GLASS_ENHANCED = "liquid_glass_enhanced"
+
+    /** 透镜档需要 Android 13（API 33）的 RuntimeShader 折射能力；更低版本不提供该选项。 */
+    val supportsLiquidGlassEnhanced: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
     /** 导航栏样式内存态：随设置页切换即时广播，供 MainScreen 重组切换样式。 */
-    val navStyleState: MutableState<String> = mutableStateOf(NAV_STYLE_DEFAULT)
+    val navStyleState: MutableStateFlow<String> = MutableStateFlow(NAV_STYLE_DEFAULT)
+
+    /** 引擎页分类显示默认关闭：关闭时平铺展示全部引擎项，开启后按 GAL/RPGM/主机/网页 分页。 */
+    const val DEFAULT_ENGINE_TABS_ENABLED = false
+
+    /** 平板侧边栏默认开启：平板/大窗口下主导航移到侧边，关闭则保持底部导航。 */
+    const val DEFAULT_SIDE_RAIL_ENABLED = true
+
+    /** 平板侧边栏内存态：设置页切换后主界面即时重组（平板判定 + 本开关决定是否用侧栏）。 */
+    val sideRailState: MutableStateFlow<Boolean> = MutableStateFlow(DEFAULT_SIDE_RAIL_ENABLED)
+
+    /** 引擎页分类显示内存态：设置页切换后引擎页即时重组。 */
+    val engineTabsState: MutableStateFlow<Boolean> = MutableStateFlow(DEFAULT_ENGINE_TABS_ENABLED)
 
     /** 游戏排序内存态：设置页切换后游戏页可随重组读取。 */
-    val gameSortState: MutableState<String> = mutableStateOf(GAME_SORT_ALPHA)
+    val gameSortState: MutableStateFlow<String> = MutableStateFlow(GAME_SORT_ALPHA)
 
     /** 封面刮削设置内存态：设置页修改后游戏页可即时读取。 */
-    val coverScraperSettingsVersion: MutableState<Int> = mutableStateOf(0)
+    val coverScraperSettingsVersion: MutableStateFlow<Int> = MutableStateFlow(0)
 
-    /** 首次组合时从持久化加载导航栏样式到内存态（幂等，重复调用仅重新读一次）。 */
+    /** 导航样式读写的串行锁：迁移的读改写与用户写入必须互斥（见 [initNavStyle]）。 */
+    private val navStyleLock = Any()
+
+    /**
+     * 首次组合时从持久化加载导航栏样式到内存态（幂等）。
+     *
+     * 与 [setNavStyle] 共用 [navStyleLock]：设置页在 IO 线程调用本方法的同时，下拉仍可交互，
+     * 若不加锁，迁移的「读—改—写」可能覆盖用户在这一窗口内刚选择的样式。
+     */
     fun initNavStyle(c: Context) {
-        navStyleState.value = getNavStyle(c)
+        synchronized(navStyleLock) {
+            migrateLegacyEnhanceFlag(c)
+            navStyleState.value = getNavStyle(c)
+        }
+    }
+
+    /**
+     * 迁移：早期实现把「透镜档」存成独立的 `liquid_glass_enhance` 布尔开关，
+     * 现已合并进 [KEY_NAV_STYLE] 的三态取值。这里做一次性升级并清掉旧键。
+     */
+    private fun migrateLegacyEnhanceFlag(c: Context) {
+        val p = prefs(c)
+        // 用 contains 而不是 getBoolean：旧键存在但值为 false 时也要清掉，否则它永远留在磁盘上
+        if (!p.contains(KEY_LIQUID_GLASS_ENHANCE)) return
+        val legacyEnhanced = p.getBoolean(KEY_LIQUID_GLASS_ENHANCE, false)
+        val stored = p.getString(KEY_NAV_STYLE, NAV_STYLE_DEFAULT)
+        val editor = p.edit().remove(KEY_LIQUID_GLASS_ENHANCE)
+        if (legacyEnhanced && stored == NAV_STYLE_LIQUID_GLASS) {
+            // 与 setNavStyle 一致地归一化：低版本设备读到备份里的透镜档时降为经典档
+            editor.putString(
+                KEY_NAV_STYLE,
+                normalizeNavStyle(NAV_STYLE_LIQUID_GLASS_ENHANCED, supportsLiquidGlassEnhanced),
+            )
+        }
+        editor.apply()
     }
 
     fun initLanguage(c: Context) {
@@ -101,6 +156,16 @@ object AppSettingsStore {
 
     fun initGameSort(c: Context) {
         gameSortState.value = getGameSort(c)
+    }
+
+    /** 首次组合时从持久化加载引擎页分类显示开关到内存态（幂等）。 */
+    fun initEngineTabs(c: Context) {
+        engineTabsState.value = isEngineTabsEnabled(c)
+    }
+
+    /** 首次组合时从持久化加载平板侧边栏开关到内存态（幂等）。 */
+    fun initSideRail(c: Context) {
+        sideRailState.value = isSideRailEnabled(c)
     }
 
     private fun prefs(context: Context) =
@@ -122,14 +187,42 @@ object AppSettingsStore {
         languageState.value = normalized
     }
 
-    /** 当前底部导航栏样式（默认 / 液态玻璃）。 */
+    /** 当前底部导航栏样式（默认 / 经典 / 透镜）。 */
     fun getNavStyle(c: Context): String =
-        prefs(c).getString(KEY_NAV_STYLE, NAV_STYLE_DEFAULT) ?: NAV_STYLE_DEFAULT
+        synchronized(navStyleLock) {
+            normalizeNavStyle(
+                stored = prefs(c).getString(KEY_NAV_STYLE, NAV_STYLE_DEFAULT),
+                enhancedSupported = supportsLiquidGlassEnhanced,
+            )
+        }
 
     fun setNavStyle(c: Context, style: String) {
-        prefs(c).edit().putString(KEY_NAV_STYLE, style).apply()
-        navStyleState.value = style
+        val normalized = normalizeNavStyle(style, supportsLiquidGlassEnhanced)
+        synchronized(navStyleLock) {
+            prefs(c).edit().putString(KEY_NAV_STYLE, normalized).apply()
+            navStyleState.value = normalized
+        }
     }
+
+    /**
+     * 导航样式归一化（纯函数，便于单元测试）：
+     * 未知值回退默认；透镜档在不支持的版本（< Android 13）回退普通档——
+     * 这样即使从更新的设备备份恢复数据，旧设备也只会得到普通档而不是降级画面。
+     */
+    fun normalizeNavStyle(stored: String?, enhancedSupported: Boolean): String =
+        when (stored) {
+            NAV_STYLE_LIQUID_GLASS -> NAV_STYLE_LIQUID_GLASS
+            NAV_STYLE_LIQUID_GLASS_ENHANCED ->
+                if (enhancedSupported) NAV_STYLE_LIQUID_GLASS_ENHANCED else NAV_STYLE_LIQUID_GLASS
+            else -> NAV_STYLE_DEFAULT
+        }
+
+    /** 当前外观风格（默认 / 复古玻璃 / 高级玻璃；未知值归一为默认）。 */
+    fun getAppearanceStyle(c: Context): AppearanceStyle =
+        AppearanceStyle.fromStorage(prefs(c).getString(KEY_APPEARANCE_STYLE, null))
+
+    fun setAppearanceStyle(c: Context, style: AppearanceStyle) =
+        prefs(c).edit().putString(KEY_APPEARANCE_STYLE, style.storageValue).apply()
 
     /** 文件夹扫描深度（1..5，默认 3）。 */
     fun getScanDepth(c: Context): Int =
@@ -151,6 +244,24 @@ object AppSettingsStore {
         }
         prefs(c).edit().putString(KEY_GAME_SORT, normalized).apply()
         gameSortState.value = normalized
+    }
+
+    /** 引擎页是否按分类（GAL / RPGM / 主机 / 网页）分页展示。 */
+    fun isEngineTabsEnabled(c: Context): Boolean =
+        prefs(c).getBoolean(KEY_ENGINE_TABS, DEFAULT_ENGINE_TABS_ENABLED)
+
+    fun setEngineTabsEnabled(c: Context, enabled: Boolean) {
+        prefs(c).edit().putBoolean(KEY_ENGINE_TABS, enabled).apply()
+        engineTabsState.value = enabled
+    }
+
+    /** 平板/大窗口下是否使用侧边导航（默认开）。 */
+    fun isSideRailEnabled(c: Context): Boolean =
+        prefs(c).getBoolean(KEY_SIDE_RAIL, DEFAULT_SIDE_RAIL_ENABLED)
+
+    fun setSideRailEnabled(c: Context, enabled: Boolean) {
+        prefs(c).edit().putBoolean(KEY_SIDE_RAIL, enabled).apply()
+        sideRailState.value = enabled
     }
 
     fun isCoverScraperOnlyMissing(c: Context): Boolean =

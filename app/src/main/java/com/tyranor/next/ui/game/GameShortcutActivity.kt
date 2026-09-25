@@ -9,9 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.tyranor.next.R
 import com.tyranor.next.core.game.launch.EngineLauncher
-import com.tyranor.next.core.game.scan.EngineScanner
+import com.tyranor.next.core.game.storage.GameLibraryFacade
 import com.tyranor.next.core.game.shortcut.GameShortcutManager
 import com.tyranor.next.core.i18n.AppLocaleController
+import com.tyranor.next.ui.common.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -42,7 +43,7 @@ class GameShortcutActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val game = withContext(Dispatchers.IO) {
-                    EngineScanner.loadGames(applicationContext)
+                    GameLibraryFacade.loadGames(applicationContext)
                         .firstOrNull { GameShortcutManager.shortcutId(it.uri) == shortcutId }
                 }
                 if (game == null) {
@@ -59,7 +60,37 @@ class GameShortcutActivity : ComponentActivity() {
                     null
                 }
 
+                // MV/MZ：未开启存档互通时，检测到标准格式存档才确认是否转化；
+                // 开启互通时启动前同步已覆盖该语义，跳过弹窗。
+                val interop = EngineLauncher.isRpgSaveInteropEnabled(applicationContext, game)
+                if (!interop) {
+                    val pending = withContext(Dispatchers.IO) {
+                        EngineLauncher.rpgSaveFormatPending(applicationContext, game)
+                    }
+                    if (pending != null) {
+                        val convert = awaitRpgSaveFormatChoice(pending.convertibleCount, pending.hashedCount)
+                        if (convert) {
+                            val op = try {
+                                EngineLauncher.convertRpgSaveFormat(applicationContext, game)
+                            } catch (ce: CancellationException) {
+                                throw ce
+                            } catch (_: Throwable) {
+                                null
+                            }
+                            val message = rpgConvertResultMessage(
+                                op,
+                                localizedContext.getString(R.string.save_format_converted_count),
+                                localizedContext.getString(R.string.save_format_converted_with_failures),
+                                localizedContext.getString(R.string.save_format_convert_failed),
+                                localizedContext.getString(R.string.save_busy_engine_running),
+                            )
+                            Toast.makeText(localizedContext, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+
                 val error = EngineLauncher.launch(this@GameShortcutActivity, game, patchChoice)
+                    .userMessage(localizedContext)
                 if (error != null) {
                     Toast.makeText(localizedContext, error, Toast.LENGTH_LONG).show()
                 }

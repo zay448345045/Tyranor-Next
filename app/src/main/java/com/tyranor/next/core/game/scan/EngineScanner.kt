@@ -8,30 +8,29 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.tyranor.next.R
 import com.tyranor.next.core.engine.EngineType
+import com.tyranor.next.core.game.model.GamePathUtils
 import com.tyranor.next.core.game.model.ScanGame
 import com.tyranor.next.core.game.storage.EngineDetectionRepository
-import com.tyranor.next.core.game.storage.GameLibraryDao
+import com.tyranor.next.core.game.storage.GameLibraryFacade
 import com.tyranor.next.core.game.storage.GameLibraryRepository
-import com.tyranor.next.core.game.storage.GameOverridesRepository
 import com.tyranor.next.core.i18n.AppLocaleController
 import com.tyranor.next.core.settings.AppSettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
-import kotlin.math.abs
 
 /**
  * 精简版游戏扫描器，识别逻辑移植自 RinneMobile 的 EngineDetector/GameScanner。
  * 支持引擎：Kirikiri、ONS、Tyrano、RPG Maker XP/VX/VX Ace、RPG Maker MV/MZ、VN、WebOther、Artemis、Ren'Py。
+ *
+ * 职责边界（架构优化 P0-1）：本类只负责「扫描 + 引擎识别」；游戏库 CRUD / 最近游玩 /
+ * 快捷启动 / 扫描根等持久化门面职责见 [GameLibraryFacade]，路径工具见 [GamePathUtils]。
  */
 object EngineScanner {
 
@@ -40,328 +39,22 @@ object EngineScanner {
     private val PFS_PATCH_NAME_RE = Regex("""^[^.]+\.pfs\.\d{3}$""")
     private val OBB_NAME_RE = Regex("""^(main|patch)\.\d+\..+\.obb$""")
 
-    // 主页面会在 Tab 动画中反复进入组合。将已解析的数据保留在进程内，避免每次切页都在
-    // 主线程重新读库、解析并构造完整游戏列表。
-    private val cacheLock = Any()
-    @Volatile
-    private var gamesCache: List<ScanGame>? = null
-    @Volatile
-    private var recentGamesCache: List<ScanGame>? = null
-    @Volatile
-    private var quickLaunchCache: List<ScanGame>? = null
-    @Volatile
-    private var rootsCache: List<String>? = null
+    /** YU-RIS 引擎 DLL（YSPNG/YSWBP/YSZLB/YSSNP/YSTCH 等，至少两个才作为弱特征）。 */
+    private val YS_DLL_NAME_RE = Regex("""^ys[a-z0-9]*\.dll$""")
 
-    // 快捷启动版本号：任何增删/刷新后自增，供首页实时感知改动后重新加载
-    private val _quickLaunchRevision = MutableStateFlow(0)
-    val quickLaunchRevision: StateFlow<Int> = _quickLaunchRevision.asStateFlow()
-    private val _rootsRevision = MutableStateFlow(0)
-    val rootsRevision: StateFlow<Int> = _rootsRevision.asStateFlow()
-    private val _libraryRevision = MutableStateFlow(0)
-    val libraryRevision: StateFlow<Int> = _libraryRevision.asStateFlow()
+    /** Siglus Gameexe（含本地化变体，与引擎 GAMEEXE_CANDIDATES 对齐）。 */
+    private val GAMEEXE_DAT_RE = Regex("""^gameexe(en|zh|zhtw|de|es|fr|id)?\.dat$""")
+    private val GAMEEXE_INI_RE = Regex("""^gameexe(en|zh|zhtw|de|es|fr|id)?\.ini$""")
 
-    init {
-        // 落库失败时丢弃内存缓存回源 DB，防止「缓存已更新、DB 缺行」的分叉永久化（重启后丢失游戏）
-        GameLibraryRepository.onPersistFailure = { invalidatePersistenceCaches() }
-    }
+    /** AVG32 散装场景 `SEEN###.TXT`（三位数）与 RealLive `SEEN####.TXT`（四位数）。 */
+    private val SEEN_SCENE_AVG32_RE = Regex("""^seen\d{3}\.txt$""")
+    private val SEEN_SCENE_REALLIVE_RE = Regex("""^seen\d{4}\.txt$""")
 
-    /** 持久化写失败后的自愈入口：清空派生自 DB 的缓存（roots 单独管理，不受影响）。 */
-    private fun invalidatePersistenceCaches() {
-        synchronized(cacheLock) {
-            gamesCache = null
-            recentGamesCache = null
-            quickLaunchCache = null
-        }
-        // 单游戏覆盖同样走「缓存先行、post 落库」模式，一并回源
-        GameOverridesRepository.invalidateRowCache()
-    }
+    /** UK2 MES 文件头（`<< UK2 TEXT Ver1.00 >>`）。 */
+    private val UK2_MES_MAGIC = "<< UK2 TEXT Ver1.00 >>".toByteArray(Charsets.US_ASCII)
 
-    /**
-     * 将 SAF tree/document URI 映射为真实文件路径（用于引擎 native 启动）。
-     * 移植自 RinneMobile ScriptEngineLaunchers.uriToFilePath：
-     * documentId 形如 "primary:path" → /storage/emulated/0/path；其他卷 → /storage/<volume>/path。
-     * 适用于 Android 内置存储；非 primary 卷映射到 /storage/<volume>。
-     */
-    fun safUriToPath(uriText: String?): String? {
-        if (uriText.isNullOrBlank() || uriText.startsWith('/')) return uriText
-        return try {
-            val uri = Uri.parse(uriText)
-            if (uri.scheme.equals("file", ignoreCase = true)) return uri.path
-            if (!uri.scheme.equals("content", ignoreCase = true)) return null
-
-            var documentId: String? = null
-            val encodedPath = uri.encodedPath
-            val documentMarker = encodedPath?.indexOf("/document/")
-            if (documentMarker != null && documentMarker >= 0) {
-                // 兼容 tree/document 混合 URI：取 /document/ 之后的编码段解码得子文档 id
-                documentId = runCatching {
-                    Uri.decode(encodedPath.substring(documentMarker + "/document/".length))
-                }.getOrNull()
-            }
-            if (documentId.isNullOrEmpty()) {
-                documentId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
-            }
-            if (documentId.isNullOrEmpty()) {
-                documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull()
-            }
-            documentId?.let { id ->
-                val colon = id.indexOf(':')
-                val volume = if (colon >= 0) id.substring(0, colon) else id
-                val relative = if (colon >= 0) id.substring(colon + 1) else ""
-                if (volume.equals("primary", ignoreCase = true)) {
-                    return if (relative.isEmpty()) "/storage/emulated/0" else "/storage/emulated/0/$relative"
-                }
-                if (volume.isNotEmpty()) {
-                    return if (relative.isEmpty()) "/storage/$volume" else "/storage/$volume/$relative"
-                }
-            }
-            null
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    fun isRemovableStoragePath(path: String): Boolean {
-        val normalized = path.replace('\\', '/')
-        return normalized.matches(Regex("""^/storage/(?!emulated/0(?:/|$))[^/]+(/.*)?$"""))
-    }
-
-    // ============ 游戏结果持久化 ============
-
-    // 持久化已迁移到 GameLibraryRepository（Room，见 docs/应用持久化存储迁移与性能优化计划方案.md）。
-    // 本类保留同步缓存门面：读命中内存缓存，未命中阻塞读库一次（Application 启动已预热）；
-    // 写同步更新缓存并按发起顺序在仓库单线程写调度器上落库（失败仅记日志，不回滚缓存）。
-
-    /** Application 启动预热：回填全部同步门面缓存，避免主线程首读阻塞。 */
-    internal fun prewarmCaches(context: Context) {
-        loadGames(context)
-        loadRecentGames(context)
-        loadQuickLaunch(context)
-        loadRoots(context)
-    }
-
-    fun loadGames(context: Context): List<ScanGame> =
-        gamesCache ?: synchronized(cacheLock) {
-            loadGamesLocked(context)
-        }
-
-    fun updateGames(context: Context, transform: (List<ScanGame>) -> List<ScanGame>): List<ScanGame> =
-        synchronized(cacheLock) {
-            val current = loadGamesLocked(context)
-            val updated = transform(current).toList()
-            if (updated != current) {
-                gamesCache = updated
-                // 差量落库：仅 upsert 变更行、删除消失行，封面单字段变化不再触发整库序列化。
-                GameLibraryRepository.post(context) { GameLibraryRepository.applyDiff(it, current, updated) }
-            }
-            updated
-        }
-
-    private fun loadGamesLocked(context: Context): List<ScanGame> =
-        gamesCache ?: GameLibraryRepository.readBlocking(context) { GameLibraryRepository.loadGames(it) }
-            .also { gamesCache = it }
-
-    /**
-     * 封面元数据单行更新（迁移方案阶段 2）：DB 只 UPDATE 封面相关列，封面刮削等高频路径
-     * 不再触发整库序列化。返回更新后的游戏；游戏不在库中或封面四列均无变化时返回 null。
-     */
-    fun updateGameCover(
-        context: Context,
-        uri: String,
-        transform: (ScanGame) -> ScanGame,
-    ): ScanGame? = synchronized(cacheLock) {
-        val current = loadGamesLocked(context)
-        val before = current.firstOrNull { it.uri == uri } ?: return null
-        val after = transform(before)
-        if (after.coverUri == before.coverUri && after.coverSource == before.coverSource &&
-            after.vndbId == before.vndbId && after.metadataTitle == before.metadataTitle
-        ) {
-            return null
-        }
-        gamesCache = current.map { if (it.uri == uri) after else it }
-        GameLibraryRepository.post(context) {
-            GameLibraryRepository.updateCover(
-                it,
-                uri,
-                after.coverUri,
-                after.coverSource,
-                after.vndbId,
-                after.metadataTitle,
-            )
-        }
-        after
-    }
-
-    fun recordRecentGame(context: Context, game: ScanGame) {
-        val openTime = System.currentTimeMillis()
-        synchronized(cacheLock) {
-            // 同步回填主库缓存：applyDiff 全行 upsert 以缓存快照为准，不同步会让后续
-            // 改名/重扫等整行写把 DB 的 last_opened_at 回滚到启动时的旧值（最近列表退化）。
-            gamesCache = gamesCache?.map { if (it.uri == game.uri) it.copy(openTime = openTime) else it }
-        }
-        val touched = game.copy(openTime = openTime)
-        updateRecentGames(context) { current ->
-            (listOf(touched) + current.filterNot { it.uri == game.uri }).take(GameLibraryDao.RECENT_LIMIT)
-        }
-    }
-
-    fun loadRecentGames(context: Context): List<ScanGame> =
-        recentGamesCache ?: synchronized(cacheLock) {
-            loadRecentGamesLocked(context)
-        }
-
-    private fun loadRecentGamesLocked(context: Context): List<ScanGame> =
-        recentGamesCache ?: GameLibraryRepository.readBlocking(context) { GameLibraryRepository.loadRecentGames(it) }
-            .also { recentGamesCache = it }
-
-    /** 删除游戏时从最近打开列表移除（最近打开为 games.last_opened_at 的派生视图，写 0 即移除）。 */
-    fun removeRecentGame(context: Context, uri: String) {
-        synchronized(cacheLock) {
-            recentGamesCache = recentGamesCache?.filterNot { it.uri == uri }
-            // 主库缓存同步清零，避免后续整行 upsert 复活已移除的最近记录。
-            gamesCache = gamesCache?.map { if (it.uri == uri) it.copy(openTime = 0) else it }
-        }
-        GameLibraryRepository.post(context) { GameLibraryRepository.clearRecent(it, uri) }
-    }
-
-    /** 从持久游戏库中移除指定游戏（在游戏页或首页删除游戏时调用，保证库与最近列表一致）。 */
-    fun removeGame(context: Context, uri: String) {
-        updateGames(context) { games -> games.filterNot { it.uri == uri } }
-    }
-
-/** 目录名 → 安全文件名（用于应用内镜像/独立存档目录），非法字符替换为下划线。 */
-    fun safeSaveName(rootPath: String): String {
-        val name = runCatching { File(rootPath).name.takeIf { it.isNotBlank() } }.getOrNull()
-            ?: abs(rootPath.hashCode()).toString()
-        return name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifEmpty { "default" }
-    }
-
-    internal fun updateRecentGames(
-        context: Context,
-        transform: (List<ScanGame>) -> List<ScanGame>,
-    ): List<ScanGame> = synchronized(cacheLock) {
-        val current = loadRecentGamesLocked(context)
-        val updated = transform(current).toList()
-        if (updated != current) {
-            recentGamesCache = updated
-            // 最近打开为派生视图：只回写保留条目的 openTime，被过滤条目对应游戏行已不在库中。
-            GameLibraryRepository.post(context) { GameLibraryRepository.restoreRecent(it, updated) }
-        }
-        updated
-    }
-
-    // ============ 首页快捷启动（最多 3 个） ============
-
-    fun loadQuickLaunch(context: Context): List<ScanGame> =
-        quickLaunchCache ?: synchronized(cacheLock) {
-            loadQuickLaunchLocked(context)
-        }
-
-    private fun loadQuickLaunchLocked(context: Context): List<ScanGame> =
-        quickLaunchCache ?: GameLibraryRepository.readBlocking(context) { GameLibraryRepository.loadQuickLaunch(it) }
-            .also { quickLaunchCache = it }
-
-    fun isQuickLaunched(context: Context, uri: String): Boolean =
-        loadQuickLaunch(context).any { it.uri == uri }
-
-    /** 加入快捷启动。已存在视为成功；槽位满（MAX_QUICK_LAUNCH=3）返回 false。 */
-    fun addQuickLaunch(context: Context, game: ScanGame): Boolean {
-        val current = loadQuickLaunch(context)
-        if (current.any { it.uri == game.uri }) return true
-        if (current.size >= GameLibraryDao.MAX_QUICK_LAUNCH) return false
-        saveQuickLaunch(context, current + game)
-        return true
-    }
-
-    fun removeQuickLaunch(context: Context, uri: String) {
-        saveQuickLaunch(context, loadQuickLaunch(context).filterNot { it.uri == uri })
-    }
-
-    /**
-     * 用主游戏库最新数据刷新快捷启动快照（游戏页修改封面等后首页实时同步），并回写存储。
-     * 快捷启动为 games 的关联视图（JOIN），标题/封面更新自动生效；不存在孤儿快照。
-     */
-    fun refreshQuickLaunch(context: Context): List<ScanGame> {
-        val library = loadGames(context).associateBy { it.uri }
-        val current = loadQuickLaunch(context)
-        val refreshed = current.mapNotNull { library[it.uri] ?: it }
-        if (refreshed != current) saveQuickLaunch(context, refreshed)
-        return refreshed
-    }
-
-    internal fun saveQuickLaunch(context: Context, games: List<ScanGame>) {
-        val snapshot = games.toList()
-        quickLaunchCache = snapshot
-        GameLibraryRepository.post(context) {
-            GameLibraryRepository.replaceQuickLaunch(it, snapshot.map { game -> game.uri })
-        }
-        _quickLaunchRevision.value++
-    }
-
-    // ============ 扫描根目录持久化 ============
-
-    fun saveRoot(context: Context, uri: Uri): List<String> = saveRoot(context, uri.toString())
-
-    /**
-     * 保存扫描根目录（支持 SAF URI 与真实路径）。
-     * 真实路径会规范化：去除首尾空白与尾部路径分隔符（保留根目录 "/"），
-     * 避免「/games」与「/games/」作为两个根重复保存、删除其一误清整目录游戏。
-     */
-    fun saveRoot(context: Context, rootPath: String): List<String> {
-        val key = rootPath.trim().trimEnd('/').let { if (it.isEmpty()) "/" else it }
-        synchronized(cacheLock) {
-            val existing = loadRootsLocked(context).toMutableList()
-            val added = !existing.contains(key)
-            if (!added) return existing
-            existing.add(key)
-            rootsCache = existing.toList()
-            GameLibraryRepository.post(context) { GameLibraryRepository.saveRoot(it, key) }
-            _rootsRevision.value++
-            return existing
-        }
-    }
-
-    fun removeRoot(context: Context, uri: Uri) {
-        synchronized(cacheLock) {
-            val current = loadRootsLocked(context)
-            val existing = current.filterNot { it == uri.toString() }
-            if (existing.size == current.size) return
-            rootsCache = existing
-            GameLibraryRepository.post(context) { GameLibraryRepository.removeRoot(it, uri.toString()) }
-            _rootsRevision.value++
-        }
-    }
-
-    fun removeRootAndGames(context: Context, uri: Uri) {
-        removeRoot(context, uri)
-        val root = uri.toString()
-        var removedUris = emptySet<String>()
-        updateGames(context) { games ->
-            removedUris = games
-                .filter { isGameUnderRoot(root, it.uri) }
-                .mapTo(HashSet()) { it.uri }
-            games.filterNot { it.uri in removedUris }
-        }
-        if (removedUris.isEmpty()) return
-        // 最近打开/快捷启动的 DB 行已随游戏行删除（派生视图 + 级联），这里只需同步内存缓存。
-        synchronized(cacheLock) {
-            recentGamesCache = recentGamesCache?.filterNot { it.uri in removedUris }
-        }
-        saveQuickLaunch(context, loadQuickLaunch(context).filterNot { it.uri in removedUris })
-        _libraryRevision.value++
-    }
-
-    fun loadRoots(context: Context): List<String> =
-        rootsCache ?: synchronized(cacheLock) {
-            loadRootsLocked(context)
-        }
-
-    private fun loadRootsLocked(context: Context): List<String> =
-        rootsCache ?: GameLibraryRepository.readBlocking(context) { GameLibraryRepository.loadRoots(it) }
-            .also { rootsCache = it }
-
-    private fun isGameUnderRoot(rootUriText: String, gameUriText: String): Boolean =
-        GameRootMatcher.isGameUnderRoot(rootUriText, gameUriText)
+    /** RealLive `SEEN.TXT` 场景头尺寸（`0x1d0`，AVG2000 为 `0x1cc`）。 */
+    private val REALLIVE_HEADER_SIZES = intArrayOf(0x1d0, 0x1cc)
 
     // ============ 扫描游戏 ============
 
@@ -369,7 +62,7 @@ object EngineScanner {
     suspend fun scanAll(context: Context): List<ScanGame> = withContext(Dispatchers.IO) {
         val startedAt = SystemClock.elapsedRealtime()
         val maxDepth = AppSettingsStore.getScanDepth(context)
-        val roots = loadRoots(context)
+        val roots = GameLibraryFacade.loadRoots(context)
         // 多个存储卷可以并行扫描，但限制为 2，避免同时向 DocumentsProvider 发起过多查询。
         val gate = Semaphore(2)
         val all = coroutineScope {
@@ -394,13 +87,13 @@ object EngineScanner {
         val scanned = scanAll(context)
         // 扫描可能耗时较长；提交结果前再次读取当前 roots，避免扫描期间设置页删除目录后，
         // 旧 root 的扫描结果在任务结束时被重新写回游戏库。
-        val activeRoots = loadRoots(context)
+        val activeRoots = GameLibraryFacade.loadRoots(context)
         val activeScanned = scanned.filter { game ->
             activeRoots.any { root -> isGameUnderRoot(root, game.uri) }
         }
-        val refreshed = updateGames(context) { currentGames ->
+        val refreshed = GameLibraryFacade.updateGames(context) { currentGames ->
             val existingByUri = currentGames.associateBy { it.uri }
-            activeScanned.map { current ->
+            val scanned = activeScanned.map { current ->
                 existingByUri[current.uri]?.let { previous ->
                     current.copy(
                         coverUri = previous.coverUri ?: current.coverUri,
@@ -416,16 +109,29 @@ object EngineScanner {
                     )
                 } ?: current
             }
+            mergeScannedWithManual(currentGames, scanned)
         }
         val validUris = refreshed.mapTo(HashSet()) { it.uri }
         // 最近打开/快捷启动为 games 派生视图，消失的游戏行已随差量删除，这里同步内存缓存即可。
-        synchronized(cacheLock) {
-            recentGamesCache = recentGamesCache?.filter { it.uri in validUris }
+        GameLibraryFacade.updateRecentGames(context) { current ->
+            current.filter { it.uri in validUris }
         }
-        saveQuickLaunch(context, loadQuickLaunch(context).filter { it.uri in validUris })
+        GameLibraryFacade.updateQuickLaunch(context) { list ->
+            list.filter { it.uri in validUris }
+        }
         // 扫描识别结果入缓存（迁移方案阶段 5）：Ren'Py 版本建议与 RPGM 子运行时。
         GameLibraryRepository.post(context) { EngineDetectionRepository.recordScanDetections(it, refreshed) }
         refreshed
+    }
+
+    /**
+     * 重扫合并：手动添加的 PC 游戏不参与扫描（不依赖扫描根），重扫时必须原样保留；
+     * 同 uri 若被扫描命中则以扫描结果为准（避免重复条目）。
+     */
+    internal fun mergeScannedWithManual(current: List<ScanGame>, scanned: List<ScanGame>): List<ScanGame> {
+        val scannedUris = scanned.mapTo(HashSet()) { it.uri }
+        val manual = current.filter { it.engine == EngineType.PC && it.uri !in scannedUris }
+        return manual + scanned
     }
 
     /**
@@ -433,12 +139,12 @@ object EngineScanner {
      * 只发现新游戏；返回 现有游戏 + 新发现游戏（已删除游戏保留，不主动移除）。
      */
     suspend fun incrementalScan(context: Context): List<ScanGame> = withContext(Dispatchers.IO) {
-        val existing = loadGames(context)
+        val existing = GameLibraryFacade.loadGames(context)
         val known = existing.mapTo(HashSet()) { it.uri }
         val seen = HashSet<String>()
         val found = mutableListOf<ScanGame>()
         val maxDepth = AppSettingsStore.getScanDepth(context)
-        loadRoots(context).forEach { root ->
+        GameLibraryFacade.loadRoots(context).forEach { root ->
             val beforeCount = found.size
             val rootUri = Uri.parse(root)
             val safSession = SafScanSession(context.applicationContext, rootUri)
@@ -447,8 +153,10 @@ object EngineScanner {
                 scanRootIncremental(context, safSession, rootNode, 0, maxDepth, known, found)
             }
             // 只有 SAF 不可用时才走真实路径兜底；正常的“没有新游戏”不再重复扫描整棵目录树。
-            if (found.size == beforeCount && (safRoot == null || safSession.queryFailed)) safUriToPath(root)?.let { path ->
-                scanRootIncrementalFile(context, FileScanSession(), File(path), 0, maxDepth, known, found)
+            if (found.size == beforeCount && (safRoot == null || safSession.queryFailed)) {
+                GamePathUtils.safUriToPath(root)?.let { path ->
+                    scanRootIncrementalFile(context, FileScanSession(), File(path), 0, maxDepth, known, found)
+                }
             }
         }
         existing + found.filter { seen.add(it.uri) }
@@ -468,7 +176,7 @@ object EngineScanner {
         if (dir.uri.toString() in known) return
         val children = session.children(dir)
 
-        val detected = detectEngine(children, session::children)
+        val detected = detectEngine(children, session::children, session::readHead)
         if (detected.engine != EngineType.UNKNOWN) {
             val coverUri = findLocalCoverUri(children)
             out.add(
@@ -485,6 +193,8 @@ object EngineScanner {
             )
             return
         }
+        // 未识别引擎：按 ROM 文件逐条入库（已存在的 ROM uri 由 known 剪枝），再递归子目录
+        out.addAll(romGamesForSaf(children, findLocalCoverUri(children), known))
         for (child in children) {
             if (child.isDirectory) {
                 scanRootIncremental(context, session, child, level + 1, maxDepth, known, out)
@@ -506,8 +216,10 @@ object EngineScanner {
         }
         // SAF 成功但未发现游戏是正常结果，不重复用 File API 扫一遍。
         // 查询异常/权限失效时仍保留 SD 卡真实路径兼容兜底。
-        if (results.isEmpty() && (safRoot == null || safSession.queryFailed)) safUriToPath(rootUriStr)?.let { path ->
-            traverseFileDirectories(context, FileScanSession(), File(path), 0, maxDepth, results)
+        if (results.isEmpty() && (safRoot == null || safSession.queryFailed)) {
+            GamePathUtils.safUriToPath(rootUriStr)?.let { path ->
+                traverseFileDirectories(context, FileScanSession(), File(path), 0, maxDepth, results)
+            }
         }
         val seen = HashSet<String>()
         return results.filter { seen.add(it.uri) }
@@ -525,7 +237,7 @@ object EngineScanner {
         val children = session.children(dir)
 
         // 1) 本级目录本身可能是游戏（含引擎特征文件）
-        val detected = detectEngine(children, session::children)
+        val detected = detectEngine(children, session::children, session::readHead)
         if (detected.engine != EngineType.UNKNOWN) {
             val coverUri = findLocalCoverUri(children)
             out.add(
@@ -544,7 +256,10 @@ object EngineScanner {
             return
         }
 
-        // 2) 否则递归子目录
+        // 2) 未识别引擎：按 ROM 文件逐条入库（PSP / Switch），再递归子目录
+        out.addAll(romGamesForSaf(children, findLocalCoverUri(children)))
+
+        // 3) 否则递归子目录
         for (child in children) {
             if (child.isDirectory) {
                 traverseDirectories(context, session, child, level + 1, maxDepth, out)
@@ -625,6 +340,15 @@ object EngineScanner {
                 if (count <= 0) "" else String(buffer, 0, count, Charsets.UTF_8)
             }
         }.getOrNull()
+
+        /** 读取文件头字节，用于 AVG32/RealLive 的 `SEEN.TXT` 与 UK2 `.MES` 内容判定。 */
+        fun readHead(node: SafNode, maxBytes: Int = 64 * 1024): ByteArray? = runCatching {
+            resolver.openInputStream(node.uri)?.use { input ->
+                val buffer = ByteArray(maxBytes)
+                val count = input.read(buffer)
+                if (count <= 0) null else buffer.copyOf(count)
+            }
+        }.getOrNull()
     }
 
     private data class SafNode(
@@ -642,7 +366,10 @@ object EngineScanner {
 
     fun applyLocalCover(context: Context, game: ScanGame): ScanGame {
         if (!game.coverUri.isNullOrBlank()) return game
-        val dir = DocumentFile.fromTreeUri(context.applicationContext, Uri.parse(game.uri)) ?: return game
+        // ROM 文件型游戏（PPSSPP / Eden）的 uri 是文件或真实路径，不是 SAF tree，跳过目录封面探测
+        val uri = runCatching { Uri.parse(game.uri) }.getOrNull() ?: return game
+        if (!DocumentsContract.isTreeUri(uri)) return game
+        val dir = DocumentFile.fromTreeUri(context.applicationContext, uri) ?: return game
         val coverUri = findLocalCoverUri(dir.listFiles())
         return if (coverUri.isNullOrBlank()) game else game.copy(
             coverUri = coverUri,
@@ -663,6 +390,104 @@ object EngineScanner {
             children.firstOrNull { child ->
                 !child.isDirectory && child.name.equals(expected, ignoreCase = true)
             }?.uri?.toString()
+        }
+    }
+
+    // ============ ROM 文件型游戏（PSP / Nintendo Switch） ============
+    // 一 ROM 一条游戏：uri = ROM 文件自身（SAF document URI / 真实路径），launchTarget = 文件名。
+    // uri 作为游戏库主键天然唯一；目录归属由 GameRootMatcher 的 documentId 前缀匹配兜住。
+
+    private val PSP_ROM_EXTENSIONS = setOf("pbp", "cso", "iso", "chd")
+    private val SWITCH_ROM_EXTENSIONS = setOf("nsp", "xci", "nca", "nro")
+
+    internal fun romEngineOf(name: String): EngineType? {
+        val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        return when (ext) {
+            in PSP_ROM_EXTENSIONS -> EngineType.PSP
+            in SWITCH_ROM_EXTENSIONS -> EngineType.NINTENDO_SWITCH
+            else -> null
+        }
+    }
+
+    /**
+     * CatSystem2 目录评分（对齐 `docs/cs2参考.md` §15 的权重，PE 项因扫描链仅有文件名而省略）。
+     * `cs2.exe` 只作为辅助加分：Runtime 常被改名，不能作为唯一判定依据。
+     */
+    private fun cs2Score(
+        hasStartupXml: Boolean,
+        intCount: Int,
+        typicalIntCount: Int,
+        hasCst: Boolean,
+        hasHg3: Boolean,
+        hasCstl: Boolean,
+        hasFes: Boolean,
+        hasAnm: Boolean,
+        hasKcs: Boolean,
+        hasCs2Exe: Boolean,
+    ): Int {
+        var score = 0
+        if (hasStartupXml) score += 15
+        if (intCount >= 2) score += 25 else if (intCount == 1) score += 10
+        // §11：典型 INT 文件名（scene/image/config/bgm/se/kcs）出现多个时明显提高可信度
+        if (typicalIntCount >= 3) score += 20 else if (typicalIntCount >= 1) score += 10
+        if (hasCst) score += 15
+        if (hasHg3) score += 10
+        if (hasCstl) score += 5
+        if (hasFes) score += 5
+        if (hasAnm) score += 5
+        if (hasKcs) score += 10
+        if (hasCs2Exe) score += 10
+        return score
+    }
+
+    private fun romTitle(name: String): String =
+        name.substringBeforeLast('.').takeIf { it.isNotBlank() } ?: name
+
+    private fun romGamesForSaf(
+        children: List<SafNode>,
+        coverUri: String?,
+        known: Set<String>? = null,
+    ): List<ScanGame> {
+        val roms = children.filter { child ->
+            !child.isDirectory &&
+                romEngineOf(child.name) != null &&
+                (known == null || child.uri.toString() !in known)
+        }
+        if (roms.isEmpty()) return emptyList()
+        val singleCover = if (roms.size == 1) coverUri else null
+        return roms.map { node ->
+            ScanGame(
+                title = romTitle(node.name),
+                uri = node.uri.toString(),
+                engine = romEngineOf(node.name)!!,
+                launchTarget = node.name,
+                coverUri = singleCover,
+                coverSource = if (singleCover.isNullOrBlank()) null else AppSettingsStore.COVER_SOURCE_LOCAL,
+            )
+        }
+    }
+
+    internal fun romGamesForFile(
+        children: Array<File>,
+        coverUri: String?,
+        known: Set<String>? = null,
+    ): List<ScanGame> {
+        val roms = children.filter { child ->
+            child.isFile &&
+                romEngineOf(child.name) != null &&
+                (known == null || child.absolutePath !in known)
+        }
+        if (roms.isEmpty()) return emptyList()
+        val singleCover = if (roms.size == 1) coverUri else null
+        return roms.map { rom ->
+            ScanGame(
+                title = romTitle(rom.name),
+                uri = rom.absolutePath,
+                engine = romEngineOf(rom.name)!!,
+                launchTarget = rom.name,
+                coverUri = singleCover,
+                coverSource = if (singleCover.isNullOrBlank()) null else AppSettingsStore.COVER_SOURCE_LOCAL,
+            )
         }
     }
 
@@ -693,10 +518,23 @@ object EngineScanner {
 
     private class FileScanSession {
         private val childrenCache = HashMap<String, Array<File>>()
+        private val headCache = HashMap<String, ByteArray?>()
 
         fun children(dir: File): Array<File> = childrenCache.getOrPut(dir.absolutePath) {
             dir.listFiles() ?: emptyArray()
         }
+
+        /** 读取文件头字节，用于 AVG32/RealLive 的 `SEEN.TXT` 与 UK2 `.MES` 内容判定。 */
+        fun readHead(file: File, maxBytes: Int = 64 * 1024): ByteArray? =
+            headCache.getOrPut(file.absolutePath) {
+                runCatching {
+                    file.inputStream().use { input ->
+                        val buffer = ByteArray(maxBytes)
+                        val count = input.read(buffer)
+                        if (count <= 0) null else buffer.copyOf(count)
+                    }
+                }.getOrNull()
+            }
     }
 
     private fun scanRootIncrementalFile(
@@ -729,6 +567,7 @@ object EngineScanner {
             )
             return
         }
+        out.addAll(romGamesForFile(children, findLocalCoverUri(children), known))
         children.filter { it.isDirectory }.forEach { child ->
             scanRootIncrementalFile(context, session, child, level + 1, maxDepth, known, out)
         }
@@ -762,6 +601,7 @@ object EngineScanner {
             )
             return
         }
+        out.addAll(romGamesForFile(children, findLocalCoverUri(children)))
         children.filter { it.isDirectory }.forEach { child ->
             traverseFileDirectories(context, session, child, level + 1, maxDepth, out)
         }
@@ -813,16 +653,19 @@ object EngineScanner {
         nameOf = { it.name },
         isDirectory = { it.isDirectory },
         childrenOf = { session.children(it).asIterable() },
+        headOf = { session.readHead(it) },
     )
 
     private fun detectEngine(
         children: List<SafNode>,
         childrenOf: (SafNode) -> List<SafNode>,
+        headOf: (SafNode) -> ByteArray?,
     ): Detection = detectEngine(
         children = children,
         nameOf = { it.name },
         isDirectory = { it.isDirectory },
         childrenOf = childrenOf,
+        headOf = headOf,
     )
 
     private fun <T> detectEngine(
@@ -830,6 +673,7 @@ object EngineScanner {
         nameOf: (T) -> String,
         isDirectory: (T) -> Boolean,
         childrenOf: (T) -> Iterable<T>,
+        headOf: (T) -> ByteArray? = { null },
     ): Detection {
 
         val xp3Files = mutableListOf<String>()
@@ -848,6 +692,25 @@ object EngineScanner {
         var hasPatchPfs = false
         var hasAnyPfs = false
         var hasObbLikeFile = false
+        var hasGameexeDat = false
+        var hasGameexeIni = false
+        var hasYscfgDat = false
+        var hasYpf = false
+        var hasYmv = false
+        var ysDllCount = 0
+        var hasStartupXml = false
+        var hasCs2Exe = false
+        var intCount = 0
+        var typicalIntCount = 0
+        var hasCst = false
+        var hasCstl = false
+        var hasHg3 = false
+        var hasFes = false
+        var hasAnm = false
+        var hasKcs = false
+        var hasScenePck = false
+        var hasSelectIni = false
+        var hasG00 = false
         var hasOnsScript = false
         var hasOnsArchive = false
         var hasRenpyDir = false
@@ -865,6 +728,14 @@ object EngineScanner {
         var hasRvdata = false
         var hasRvdata2 = false
         var hasMkxpZRubyRuntime = false
+        var hasFvpScript = false
+        var hasFvpPack = false
+        var hasUk2Cfg = false
+        var hasSeenSceneAvg32 = false
+        var hasSeenSceneReallive = false
+        var seenArchiveNode: T? = null
+        var seenArchiveIsRoot = false
+        var uk2MesNode: T? = null
 
         fun collect(entry: T, rel: String) {
             val lower = nameOf(entry).lowercase(Locale.ROOT)
@@ -875,6 +746,21 @@ object EngineScanner {
                 if (lower == "renpy") hasRenpyDir = true
                 if (lower == "game") hasGameDir = true
                 if (lower == "app.asar" || childRel.endsWith("/app.asar")) hasAppAsar = true
+                if (lower == "config") {
+                    // CatSystem2：config/startup.xml 是高价值目录特征（不递归，只看该文件名）
+                    childrenOf(entry).forEach { child ->
+                        if (nameOf(child).equals("startup.xml", ignoreCase = true)) hasStartupXml = true
+                    }
+                }
+                if (lower == "pac") {
+                    // YU-RIS 封包目录：只为 YURIS 特征扫描（.ypf/.ymv），不进入通用目录白名单，
+                    // 避免把包内文件暴露给其它引擎的检测规则
+                    childrenOf(entry).forEach { child ->
+                        val childName = nameOf(child).lowercase(Locale.ROOT)
+                        if (childName.endsWith(".ypf")) hasYpf = true
+                        if (childName.endsWith(".ymv")) hasYmv = true
+                    }
+                }
                 if (lower in ENGINE_SEARCH_DIRECTORIES) {
                     childrenOf(entry).forEach { collect(it, childRel) }
                 }
@@ -896,6 +782,37 @@ object EngineScanner {
                 lower == "root.pfs" || PFS_PATCH_NAME_RE.matches(lower) -> hasPatchPfs = hasPatchPfs || lower != "root.pfs"
                 lower.endsWith(".pfs") || PFS_PATCH_NAME_RE.matches(lower) -> hasAnyPfs = true
                 lower.endsWith(".obb") || OBB_NAME_RE.matches(lower) -> hasObbLikeFile = true
+                GAMEEXE_DAT_RE.matches(lower) -> hasGameexeDat = true
+                GAMEEXE_INI_RE.matches(lower) -> hasGameexeIni = true
+                lower == "scene.pck" -> hasScenePck = true
+                lower == "select.ini" -> hasSelectIni = true
+                lower.endsWith(".g00") -> hasG00 = true
+                // RealLive / AVG32 / UK2（framebuffer 引擎）
+                lower == "uk2.cfg" -> hasUk2Cfg = true
+                lower == "seen.txt" -> {
+                    if (seenArchiveNode == null || (!seenArchiveIsRoot && rel.isEmpty())) {
+                        seenArchiveNode = entry
+                        seenArchiveIsRoot = rel.isEmpty()
+                    }
+                }
+                SEEN_SCENE_AVG32_RE.matches(lower) -> hasSeenSceneAvg32 = true
+                SEEN_SCENE_REALLIVE_RE.matches(lower) -> hasSeenSceneReallive = true
+                lower.endsWith(".mes") -> if (uk2MesNode == null) uk2MesNode = entry
+                lower == "yscfg.dat" -> hasYscfgDat = true
+                lower == "cs2.exe" -> hasCs2Exe = true
+                lower.endsWith(".int") -> {
+                    intCount++
+                    if (lower in CS2_TYPICAL_INT_NAMES) typicalIntCount++
+                }
+                lower.endsWith(".cst") -> hasCst = true
+                lower.endsWith(".cstl") -> hasCstl = true
+                lower.endsWith(".hg3") -> hasHg3 = true
+                lower.endsWith(".fes") -> hasFes = true
+                lower.endsWith(".anm") -> hasAnm = true
+                lower.endsWith(".kcs") -> hasKcs = true
+                lower.endsWith(".ypf") -> hasYpf = true
+                lower.endsWith(".ymv") -> hasYmv = true
+                YS_DLL_NAME_RE.matches(lower) -> ysDllCount++
                 lower == "0.txt" || lower == "00.txt" || lower == "nscript.dat" ||
                     lower == "onscript.nt2" || lower == "onscript.nt3" -> hasOnsScript = true
                 lower.endsWith(".nsa") || lower.endsWith(".sar") -> hasOnsArchive = true
@@ -919,10 +836,88 @@ object EngineScanner {
                     }
                 }
                 lower.endsWith(".rpyc") -> hasRpyc = true
+                // FVP（rfvp）：根目录脚本（原版 *.hcb / 汉化 *.bch）+ 资源包特征
+                rel.isEmpty() && (lower.endsWith(".hcb") || lower.endsWith(".bch")) -> hasFvpScript = true
+                rel.isEmpty() && lower in FVP_PACK_NAMES -> hasFvpPack = true
             }
         }
         children.forEach { collect(it, "") }
 
+        if (hasGameexeDat && hasScenePck) {
+            return Detection(EngineType.SIGLUS, 96, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasFvpScript && hasFvpPack) {
+            return Detection(EngineType.FVP, 96, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasFvpScript) {
+            return Detection(EngineType.FVP, 88, LAUNCH_TARGET_GAME_DIR)
+        }
+        // ---- framebuffer 引擎（RealLive / AVG32 / UK2）----
+        if (hasUk2Cfg) {
+            return Detection(EngineType.UK2, 96, LAUNCH_TARGET_GAME_DIR)
+        }
+        val uk2Mes = uk2MesNode
+        if (uk2Mes != null && hasUk2MesHeader(headOf(uk2Mes))) {
+            return Detection(EngineType.UK2, 90, LAUNCH_TARGET_GAME_DIR)
+        }
+        val seenKind = classifySeenArchive(seenArchiveNode?.let { headOf(it) })
+        if (hasGameexeIni && seenKind != null) {
+            return Detection(seenKind, 96, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasGameexeIni && hasSeenSceneReallive) {
+            return Detection(EngineType.REALLIVE, 92, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasGameexeIni && hasSeenSceneAvg32) {
+            return Detection(EngineType.AVG32, 92, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (seenKind != null) {
+            return Detection(seenKind, 80, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (uk2MesNode != null) {
+            return Detection(EngineType.UK2, 82, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasGameexeIni && hasScenePck) {
+            return Detection(EngineType.SIGLUS, 95, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasGameexeDat || hasGameexeIni) {
+            return Detection(EngineType.SIGLUS, 85, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasScenePck && hasSelectIni && hasG00) {
+            return Detection(EngineType.SIGLUS, 80, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasYscfgDat && hasYpf) {
+            return Detection(EngineType.YURIS, 96, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasYpf) {
+            return Detection(EngineType.YURIS, 90, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasYscfgDat) {
+            return Detection(EngineType.YURIS, 85, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (ysDllCount >= 2) {
+            return Detection(EngineType.YURIS, 80, LAUNCH_TARGET_GAME_DIR)
+        }
+        if (hasYmv) {
+            return Detection(EngineType.YURIS, 75, LAUNCH_TARGET_GAME_DIR)
+        }
+
+        // CatSystem2（docs/cs2参考.md）：文件名层面的评分识别。
+        // Runtime exe 常被改名（cs2.exe 仅作辅助），PE 版本信息检测不适用于仅名称可得的扫描链。
+        val cs2Score = cs2Score(
+            hasStartupXml = hasStartupXml,
+            intCount = intCount,
+            typicalIntCount = typicalIntCount,
+            hasCst = hasCst,
+            hasHg3 = hasHg3,
+            hasCstl = hasCstl,
+            hasFes = hasFes,
+            hasAnm = hasAnm,
+            hasKcs = hasKcs,
+            hasCs2Exe = hasCs2Exe,
+        )
+        if (cs2Score >= CS2_MIN_SCORE) {
+            return Detection(EngineType.CATSYSTEM2, cs2Score, LAUNCH_TARGET_GAME_DIR)
+        }
         if ((hasSystemIni && hasFirstIet) || hasRootPfs || hasPatchPfs || hasAnyPfs || (hasBootIni && hasObbLikeFile)) {
             return Detection(
                 EngineType.ARTEMIS,
@@ -988,7 +983,67 @@ object EngineScanner {
         return UNKNOWN_DETECTION
     }
 
+    /** UK2 `.MES` 头判定（读到内容时使用）。 */
+    private fun hasUk2MesHeader(head: ByteArray?): Boolean {
+        if (head == null || head.size < UK2_MES_MAGIC.size) return false
+        return UK2_MES_MAGIC.indices.all { head[it] == UK2_MES_MAGIC[it] }
+    }
+
+    /**
+     * 区分共享 `SEEN.TXT` 文件名的 AVG32 与 RealLive：
+     * `PACL` 头 → AVG32；10000 项 TOC（每项 8 字节 offset/length，场景头 `0x1d0`/`0x1cc`）→ RealLive。
+     * 参考上游 `engine-detect`，只读文件头即可判定。
+     */
+    private fun classifySeenArchive(head: ByteArray?): EngineType? {
+        if (head == null || head.size < 8) return null
+        if (head.size >= 4 &&
+            head[0] == 'P'.code.toByte() &&
+            head[1] == 'A'.code.toByte() &&
+            head[2] == 'C'.code.toByte() &&
+            head[3] == 'L'.code.toByte()
+        ) {
+            return EngineType.AVG32
+        }
+        var valid = 0
+        for (index in 0 until 4) {
+            val at = index * 8
+            if (at + 8 > head.size) break
+            val offset = readU32(head, at)
+            val length = readU32(head, at + 4)
+            if (offset == 0L || length < 4) continue
+            if (offset + 4 <= head.size) {
+                val header = readU32(head, offset.toInt())
+                if (REALLIVE_HEADER_SIZES.none { it.toLong() == header }) return null
+            }
+            valid++
+            if (valid >= 4) break
+        }
+        return if (valid > 0) EngineType.REALLIVE else null
+    }
+
+    private fun readU32(bytes: ByteArray, at: Int): Long {
+        if (at < 0 || at + 4 > bytes.size) return 0
+        return (bytes[at].toLong() and 0xFF) or
+            ((bytes[at + 1].toLong() and 0xFF) shl 8) or
+            ((bytes[at + 2].toLong() and 0xFF) shl 16) or
+            ((bytes[at + 3].toLong() and 0xFF) shl 24)
+    }
+
     const val LAUNCH_TARGET_GAME_DIR = "DIR"
+
+    /** CatSystem2 判定阈值（§15 评分：`startup.xml + 多个 .int`（含典型名）即可达标）。 */
+    private const val CS2_MIN_SCORE = 50
+
+    /** §11 典型 INT 文件名。 */
+    private val CS2_TYPICAL_INT_NAMES = setOf(
+        "scene.int", "image.int", "config.int", "bgm.int", "se.int", "kcs.int",
+    )
+
+    /** FVP 资源包文件名（根目录特征，与 `*.hcb`/`*.bch` 脚本配合判定）。 */
+    private val FVP_PACK_NAMES = setOf(
+        "graph.bin", "graph_vis.bin", "bgm.bin", "se.bin", "se_env.bin", "se_sys.bin",
+        "voice.bin", "voice2.bin", "etc.bin",
+    )
 
     private val UNKNOWN_DETECTION = Detection(EngineType.UNKNOWN, 0, "")
 
@@ -997,6 +1052,7 @@ object EngineScanner {
 
     private val ENGINE_SEARCH_DIRECTORIES = setOf(
         "data",
+        "dat",
         "tyrano",
         "scenario",
         "system",
@@ -1008,4 +1064,7 @@ object EngineScanner {
         "www",
         "js",
     )
+
+    private fun isGameUnderRoot(rootUriText: String, gameUriText: String): Boolean =
+        GameRootMatcher.isGameUnderRoot(rootUriText, gameUriText)
 }

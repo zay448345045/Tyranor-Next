@@ -55,7 +55,8 @@
 
 - 职责：游戏扫描、游戏模型、启动编排、封面抓取、存档管理、在线补丁、应用/引擎/单游戏配置、授权、后台更新。
 
-- 规则：可以依赖 `engine` 模块；不得依赖 Compose UI 组件；不得把页面类作为普通业务依赖。
+- 规则：可以依赖 `engine` 模块；不得依赖 Compose（含 `androidx.compose.ui/foundation/material*` UI 组件，以及 `androidx.compose.runtime` 的状态原语与 `@Immutable` 注解）；不得把页面类作为普通业务依赖。
+  全局可观察状态一律用 `kotlinx.coroutines.flow`（`StateFlow`）或纯数据载荷（`ThemeColorPayload` 模式）由 UI 层 `collectAsState` 订阅。
 
 - 新增功能按域放入 `core/game`、`core/engine`、`core/cover`、`core/patch`、`core/settings`、`core/auth`、`core/updater` 等包。
 
@@ -79,6 +80,27 @@
 - `app/src/main/nativeplugins`：插件 manifest 与 app-only 插件源头。
 
 - 禁止在 app 与 engine 两边手工维护同一份二进制或共享脚本；构建脚本会检查重复源文件。
+
+***
+
+## 错误处理协议（core → ui）
+
+功能抽象层（core）对 UI 的错误协议固定为以下三种，禁止再引入其它风格：
+
+1. **类型化失败结果**：可预期的业务失败返回 sealed Result / 类型化错误 DTO，由 UI 映射文案。
+   现有模板：`LaunchResult`（`core/game/launch/LaunchResult.kt`）、`ExternalEngineLaunchResult`、
+   `UpdateCheckResult`、`CoverScraperService` 的 sealed 结果。
+2. **抛类型化异常**：确实需要异常语义时，异常必须携带错误码而非文案（如
+   `GameSaveException(SaveErrorCode, detail)`），UI 层按错误码映射 string 资源。
+3. **无结果即 null / 空集合**；调用方容错自行 `runCatching`（仅限边角工具函数）。
+
+硬性约束：
+
+- **core 不得把本地化文案当错误消息/返回值**（禁止 `throw IOException(text(R.string...))`
+  或 `return text(R.string...)`）；需要提示时返回错误码，文案组装一律上移 UI
+  （映射文件放 `ui/<域>/` 或 `ui/common/`，如 `ui/common/LaunchErrorMessages.kt`）。
+- 新增错误分支时优先扩展已有 sealed 类型/错误码枚举，不新增并行协议。
+- 取消（`CancellationException`）不属于失败，必须原样向上传播。
 
 ***
 
@@ -123,6 +145,11 @@
 ### 4. 背景色
 
 - 顶部栏**使用页面背景色** **`colorScheme.background`（不透明）**（`Modifier.background(colorScheme.background)`），标题与图标统一使用 `colorScheme.onBackground`。
+
+- **玻璃系外观风格（复古玻璃 / 高级玻璃）**：玻璃下页面背景透明，顶栏保持透明（露出渐变/色斑与环境光）。
+  因此**页面内容必须整体垫在顶栏下方**（用持久 `Modifier.padding(top = 顶栏高度)`，而不是滚动区的
+  `contentPadding`），否则滚动内容会从顶栏下方穿过与标题重叠。设置类页面（MiuixScaffold）的
+  `innerPadding` 顶部值一律加到列表 modifier 上，`contentPadding` 只保留额外的间距。
 
 - 禁止使用主题色 `primary` 作为顶部栏背景。
 
@@ -173,7 +200,18 @@ Column(fillMaxSize)                                // 页面根
 
 - 页面切换动画必须保持统一：主 Screen 四个 Tab 间切换使用水平移动动画；其他独立 Activity 页面进入使用向上翻页动画，退出/返回使用向下翻页动画。
 
-- 组件统一圆角数值为 **8dp**；列表项卡片、功能项卡片、弹窗等圆角组件都应使用 `RoundedCornerShape(8.dp)`。
+- 组件统一圆角数值为 **8dp**；列表项卡片、功能项卡片、弹窗等圆角组件统一引用 `theme/AppShapes.kt`：
+  `AppComponentShape`（默认 8dp / 玻璃外观风格与悬浮导航一致 32dp）、Miuix 组件用 `AppComponentCornerRadius`、
+  抽屉顶部用 `AppSheetTopShape`；禁止再散落圆角字面量。
+
+- **平板侧栏**：`isSideRailLayout()`（`isTabletScreen()` 命中且应用设置「平板侧边栏」开关开启，默认开）命中时主导航移到侧边（`ui/common/AppNavigationRail.kt`）：侧栏形态按外观风格取该主题「默认导航栏」形态，液态玻璃两档不适配侧栏；侧栏占布局宽度，底部留白归零；高级玻璃侧栏采样单独的纯背景层（`railBackdrop`，不能采样内容层——坐标会越界）。选中态图标动画统一用 `ui/common/NavigationTabIcon.kt`。
+
+- **圆角豁免**：液态玻璃导航（`ui/common/LiquidGlassNavigation.kt`）的栏体与导航项胶囊使用 **16dp**（8dp 基础上加大 8dp），为有意设计，不受 8dp 条款约束；其余组件不得援引此豁免。
+
+- **圆角豁免（液态玻璃 · 透镜底栏）**：应用设置「导航栏样式」选到「液态玻璃 · 透镜」后挂载的
+  `ui/common/glass/EnhancedLiquidGlassNavigation.kt`（栏体 / 图标副本行 / 移动透镜三处）使用
+  `theme/AppShapes.kt` 的 `AppNavCapsuleShape`（胶囊，圆角 = 半高），为本项目为该样式既定的连续胶囊轮廓，为有意设计。
+  **该组件内也必须统一引用 `AppNavCapsuleShape`，不得就地新建等价的圆角形状**；该豁免仅限该组件，其余组件不得援引。
 
 - 所有弹窗背景必须为白色，且圆角必须使用统一圆角数值 **8dp**。
 
@@ -243,13 +281,15 @@ Column(fillMaxSize)                                // 页面根
 
 ### 1. 组件形态与参数
 
-- 排版固定：圆角 `RoundedCornerShape(8.dp)` + 背景取 `theme/Color.kt` 常量 `NavWhite`（页面场景默认）+ 内边距（横向 16dp / 纵向 12dp）+ 左侧图标 24dp + 右侧指示箭头 `KeyboardArrowRight`。均由组件内部处理。
+- 排版固定：圆角 `AppComponentShape`（默认 8dp / 玻璃风格 32dp，见 `theme/AppShapes.kt`）+ 背景取 `theme/Color.kt` 常量 `NavWhite`（页面场景默认）+ 内边距（横向 16dp / 纵向 12dp）+ 左侧图标 24dp + 右侧指示箭头 `KeyboardArrowRight`。均由组件内部处理。
 
-- 背景色约定（与白底弹窗对偶，详细见 3.5）：**页面上的条目**默认 `NavWhite`（页面背景 `PageGrey` → 灰底白卡）；**弹窗内的条目**必须传 `containerColor = PageGrey`（弹窗背景 `NavWhite` → 白底灰卡），保证条目与弹窗背景反色、层次分明。「色调切换」开启时 `NavWhite`/`PageGrey` 同步互换，反差关系不变。
+- 背景色约定（与白底弹窗对偶，详细见 3.5）：**页面上的条目**默认 `NavWhite`（页面背景 `PageGrey` → 灰底白卡）；**弹窗内的条目**必须传 `containerColor = DialogItemSurface`（默认风格 = `PageGrey` 白底弹窗灰卡；玻璃风格 = 亮玻璃面），保证条目与弹窗背景反色、层次分明。「色调切换」开启时 `NavWhite`/`PageGrey` 同步互换，反差关系不变；玻璃风格下 `PageGrey` 透明、`NavWhite` 变为半透明玻璃面，`DialogItemSurface` 自动切换为亮玻璃面。
 
 - 标题用 `MaterialTheme.typography.bodyMedium`、颜色取 `TextColor`；摘要可选，用 `bodySmall` + 半透明辅助色。均不依赖 `colorScheme.surface*`（遵循「组件背景色统一规范」）。
 
 - `leadingIcon`：左侧图标 drawable；未提供时组件自动使用**默认占位图标** `DEFAULT_LEADING_ICON`，不允许调用方在不该出现空图标时留白。
+
+- `showLeadingIcon`：是否展示左侧图标，默认 `true`。**纯动作条目**（如存档导出/导入/删除等无图标的动作项）可传 `false` 隐藏图标位，此时标题顶格排列；不得为隐藏图标而乱传占位图。
 
 - `onClick`：点击回调；传 `null` 表示不可用（整条变灰且不可点击）。
 
@@ -291,7 +331,8 @@ Column(fillMaxSize)                                // 页面根
 | 场景                                   | 位置                                                | 组件                 |
 | ------------------------------------ | ------------------------------------------------- | ------------------ |
 | 设置清单开关（KRKR/ONS/Artemis/RPG Maker 等） | `SettingsScreen.kt`                               | `SwitchPreference` |
-| 应用设置开关（色调切换 / 圆角导航等）                 | `AppSettingsActivity.kt`                          | `SwitchPreference` |
+| 应用设置开关（色调切换等）                        | `AppSettingsActivity.kt`                          | `SwitchPreference` |
+| 应用设置「导航栏样式」三选一                      | `AppSettingsActivity.kt`                          | `OverlayDropdownPreference`（非布尔选择，见本节第 3 条例外） |
 | 封面来源启用开关（行内）                         | `CoverScraperSettingsActivity.kt`（CoverSourceRow） | `Switch`           |
 
 ### 3. 例外
@@ -346,7 +387,21 @@ Column(fillMaxSize)                                // 页面根
 
 - 卡片/导航栏/组件容器（含弹窗背景） → `NavWhite`
 
-- 弹窗内的条目容器（如 `AppNavItem` 传 `containerColor = PageGrey`、手写条目行） → `PageGrey`，与弹窗白色背景形成对偶反差
+- 弹窗内的条目容器（如 `AppNavItem` 传 `containerColor = DialogItemSurface`、手写条目行用
+  `DialogItemSurface`） → 与弹窗背景形成对偶反差
+
+- **玻璃系外观风格（应用设置 → 外观风格 = 复古玻璃 / 高级玻璃）**：页面背景固定深色画面
+  （复古 = 黑灰渐变 + 主题色对角环境光；高级 = 游戏封面拼贴的盒式模糊底图 + 压暗 + 暗角，
+  见 `ui/common/glass/AmbientBackdrop.kt` 与 `theme/AdvancedGlassStyle.kt`），
+  `PageGrey` 透明、`TextColor` 恒浅色；卡片/条目/弹窗/输入框统一 0.5dp 发丝描边（`Modifier.glassBorder()`，
+  高级玻璃为「上亮下暗」渐变描边并可在面板上叠 `Modifier.glassSpecular()` 顶边高光），
+  高级玻璃卡片为浅色磨砂膜（14% 白），弹窗/抽屉面板为 `rememberAdvancedGlassPanelSurface()` 从页面背景取色的渐变（不得写死灰色；抽屉渐变必须画在内容层，外层 modifier 会因 anchors 布局偏移而错位）。
+  此模式下「外观模式」
+  与「色调切换」不可用（置灰），色调轮盘保持可用（兜底色斑随主题色变化）。
+  高级玻璃的绘制是独立实现（`theme/AdvancedGlassStyle.kt`），复古玻璃的 `GlassStyle.kt` 不参与其材质；
+  新增组件必须走动态常量与 `glassBorder`，不得硬编码玻璃色值。真 backdrop 采样仅限白名单
+  （液态玻璃底栏、高级玻璃悬浮默认导航条）；弹窗/抽屉是独立窗口，**无法**采样主窗口内容，
+  只能用背景取色渐变 + 遮罩 + 光学描边，不要为它们接 backdrop。
 
 - **底部抽屉/面板（`ModalBottomSheet`）→ 按「页面灰底」处理**：`ModalBottomSheet` 的 `containerColor` 通常取 `colorScheme.background`（浅/深随色调切换，等同页面背景），因此抽屉内条目（`AppNavItem` 等）必须传 `NavWhite`（灰底白卡），**不要**套用「弹窗白底灰卡」用 `PageGrey`——否则 item 与抽屉背景同色融为一体（如游戏操作抽屉 GameActionsSheet）。
 
@@ -387,4 +442,8 @@ Column(fillMaxSize)                                // 页面根
 - 构建命令：`./gradlew assembleDebug --no-daemon`
 
 - 使用 Android CLI（`--sdk=/tmp/androidsdk`）安装到实机。
+
+- 发版规则（issue #79）：只修改 `app/build.gradle.kts` 的 `appVersionName`；`versionCode` 由 `versionCodeOf()` 自动推导
+  （`major*1_000_000 + minor*1_000 + patch`，minor/patch 必须 < 1000），禁止手写或回退 `versionCode`。
+  beta-release workflow 会前置校验 versionCode 严格递增，并在构建后核对 APK 实际 versionCode（不一致即失败）。
 

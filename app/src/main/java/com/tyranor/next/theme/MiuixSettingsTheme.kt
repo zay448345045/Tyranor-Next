@@ -6,7 +6,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
-import com.tyranor.next.ui.common.WithoutPressIndication
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.defaultTextStyles
@@ -38,7 +37,8 @@ fun MiuixSettingsTheme(
     // 使设置类页面与其余页面同步跟随主题色。
     val primary = primaryColor ?: AppThemeColors.primary
     val dark = AppThemeColors.isDark
-    val colors = if (dark) {
+    val glass = AppThemeColors.isGlass
+    val baseColors = if (dark) {
         darkColorScheme(
             primary = primary,
             background = PageGrey,
@@ -60,6 +60,29 @@ fun MiuixSettingsTheme(
             onSurfaceContainer = TextColor,
             sliderKeyPointForeground = Color.White,
         )
+    }
+    // 玻璃系外观风格：输入框/浮层/分割线/遮罩改用玻璃色板（高级玻璃更透、描边更亮）；
+    // 卡片底色（surfaceContainer）与文字（onSurface*）已由动态色常量自动覆盖。
+    val colors = if (glass) {
+        val advanced = AppThemeColors.isAdvancedGlass
+        val secondaryText = if (advanced) AdvancedGlassTextSecondary else GlassTextSecondary
+        baseColors.copy(
+            surfaceContainerHigh = if (advanced) AdvancedGlassSurfaceHigh else GlassSurfaceHigh,
+            surfaceContainerHighest = if (advanced) AdvancedGlassSurfaceHigh else GlassSurfaceHigh,
+            secondaryContainer = if (advanced) AdvancedGlassSurfaceHigh else GlassSurfaceHigh,
+            onSecondaryContainer = TextColor,
+            onSurfaceContainerVariant = secondaryText,
+            onBackgroundVariant = secondaryText,
+            onSurfaceSecondary = secondaryText,
+            onSurfaceVariantSummary = secondaryText,
+            onSurfaceVariantActions = secondaryText.copy(alpha = 0.6f),
+            outline = if (advanced) AdvancedGlassBorder else GlassBorder,
+            dividerLine = if (advanced) AdvancedGlassBorder else GlassBorder,
+            // 高级玻璃浮层为较高不透明度的灰玻璃膜，遮罩与复古一致
+            windowDimming = Color.Black.copy(alpha = 0.6f),
+        )
+    } else {
+        baseColors
     }
     MiuixTheme(
         colors = colors,
